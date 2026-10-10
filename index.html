@@ -41,32 +41,55 @@ label{font-size:13px;color:var(--mu)}
 .kpi{background:linear-gradient(135deg,#0f766e,#14b8a6);color:#fff;border-radius:16px;padding:16px;margin-bottom:12px}
 .kpi .l{font-size:13px;opacity:.85}.kpi .v{font-size:30px;font-weight:700;margin:2px 0 10px}
 .kpi .r{display:flex;gap:18px}.kpi .r b{display:block;font-size:16px}
+.offb{position:fixed;left:0;right:0;top:env(safe-area-inset-top,0px);background:#b45309;color:#fff;text-align:center;font-size:12px;padding:4px 8px;z-index:20}.offb[hidden]{display:none}
 </style>
 </head>
 <body>
 <header id="hd"></header>
 <main id="app"></main>
+<div id="off" class="offb" hidden>📴 Sin conexión · mostrando lo último guardado (solo lectura)</div>
 <div id="modal"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 <script>
 const SUPABASE_URL = "https://azaeasfifcamwqqlfztb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_4__2tHY6qNwif2xQNg6sKw_TtnZE6X2";
 
-const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// Sin conexión: se guarda la última respuesta de cada consulta para poder consultarla sin señal
+const cfetch = async (url, opts) => {
+  const u = String(url);
+  if ((!opts || !opts.method || opts.method === "GET") && u.includes("/rest/v1/")) {
+    const key = "alc:" + (new Headers(opts && opts.headers).get("Accept") || "") + u;
+    try {
+      const r = await fetch(url, opts);
+      if (r.ok) { try { localStorage.setItem(key, await r.clone().text()); } catch (e) {} }
+      return r;
+    } catch (e) {
+      const c = localStorage.getItem(key);
+      if (c == null) throw e;
+      const b = document.getElementById("off"); if (b) b.hidden = false;
+      return new Response(c, { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+  }
+  return fetch(url, opts);
+};
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { global: { fetch: cfetch } });
 const S = { cats: [], pris: [], proys: [], p: null, regs: [], f: { q: "", c: "", p: "", e: "" } };
 const $ = id => document.getElementById(id);
 const mm = (n, c) => new Intl.NumberFormat("es-AR", { style: "currency", currency: c || "ARS", maximumFractionDigits: 0 }).format(n || 0);
 const money = n => mm(n, S.p?.moneda);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const fail = e => { if (e) { alert(e.message || e); return true; } };
+const fail = e => { if (e) { const m = e.message || String(e); alert(/fetch|network|Load failed/i.test(m) ? "Sin conexión: por ahora solo podés consultar tus datos. Probá de nuevo cuando tengas señal." : m); return true; } };
 
 const logo = (n = 40) => `<svg width="${n}" height="${n}" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="12" fill="#0f766e"/><path d="M13 21l7 7 15-15" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><rect x="12" y="35" width="24" height="4" rx="2" fill="#fff" opacity=".4"/><rect x="12" y="35" width="16" height="4" rx="2" fill="#fff"/></svg>`;
 
 async function init() {
-  const { data } = await db.auth.getSession();
+  const { data } = await db.auth.getSession().catch(() => ({ data: {} }));
   if (recuperando) return nuevaClave();
-  data.session ? await home() : login();
+  (data.session || (!navigator.onLine && localStorage.getItem("alc_uid"))) ? await home() : login();
 }
 
 let recuperando = false;
@@ -147,7 +170,8 @@ async function loadCats(pid) {
 }
 
 async function home() {
-  S.uid = (await db.auth.getSession()).data.session?.user.id;
+  S.uid = (await db.auth.getSession().catch(() => ({ data: {} }))).data.session?.user.id || localStorage.getItem("alc_uid");
+  if (S.uid) localStorage.setItem("alc_uid", S.uid);
   const { data, error } = await db.from("proyecto").select("*").eq("activo", true).order("fecha_creado", { ascending: false });
   if (fail(error)) return;
   S.proys = data; S.p = null;
@@ -156,7 +180,7 @@ async function home() {
   const st = {}; rg.forEach(r => { const o = st[r.proyecto_id] ||= { n: 0, g: 0 }; o.n++; if (r.comprado) o.g += Number(r.valor); });
   const mon = {}; data.forEach(p => { const c = p.moneda || "ARS", o = mon[c] ||= { tp: 0, tg: 0 }; o.tp += Number(p.valor_inicial); o.tg += st[p.id]?.g || 0; });
   $("hd").innerHTML = `<h1 class="bh">${logo(26)}Mis proyectos</h1><button class="s" id="lo">Salir</button>`;
-  $("lo").onclick = async () => { await db.auth.signOut(); login(); };
+  $("lo").onclick = async () => { await db.auth.signOut().catch(() => {}); Object.keys(localStorage).filter(k => k.startsWith("alc")).forEach(k => localStorage.removeItem(k)); login(); };
   $("app").innerHTML = (data.length ? Object.entries(mon).map(([c, o]) => `<div class="kpi"><div class="l">Disponible${Object.keys(mon).length > 1 ? " (" + c + ")" : " en tus proyectos"}</div><div class="v">${mm(o.tp - o.tg, c)}</div><div class="r"><div><span class="l">Presupuesto</span><b>${mm(o.tp, c)}</b></div><div><span class="l">Comprado</span><b>${mm(o.tg, c)}</b></div></div></div>`).join("")
     + data.map(p => { const o = st[p.id] || { n: 0, g: 0 }, P = Number(p.valor_inicial); return `<div class="card" data-p="${p.id}"><div class="row"><div class="grow"><b>${esc(p.descripcion)}</b>${p.user_id !== S.uid ? ` <span class="tag" style="background:#6b7280">Compartido</span>` : mem[p.id] ? " 👥" : ""}<div class="mu">${o.n} ítems · Presupuesto ${mm(P, p.moneda)}</div></div><span>›</span></div><div class="bar"><i style="width:${Math.min(100, P ? o.g / P * 100 : 0)}%"></i></div><div class="mu" style="margin-top:6px">Comprado ${mm(o.g, p.moneda)} · Disponible ${mm(P - o.g, p.moneda)}</div></div>`; }).join("") : `<p class="mu">Todavía no tenés proyectos.</p>`)
     + `<p style="text-align:center"><a href="#" id="pt" style="color:var(--ac)">🗑 Proyectos eliminados</a></p><button class="fab" id="np">+ Proyecto</button>`;
@@ -284,7 +308,7 @@ function regForm(r) {
   <div class="chk"><input id="rf" type="checkbox" ${r?.fijo ? "checked" : ""}><label for="rf" style="font-size:16px;color:var(--tx)">📌 Fijar: se compra sí o sí</label></div>
   <div class="chk"><input id="rb" type="checkbox" ${r?.comprado ? "checked" : ""}><label for="rb" style="font-size:16px;color:var(--tx)">🛒 Ya lo compré</label></div>
   ${r ? `<div class="row" style="margin-bottom:12px"><span class="grow mu">Orden dentro de su grupo</span><button class="s" id="up">▲</button><button class="s" id="dn">▼</button></div>` : ""}
-  <div class="row"><button class="grow" id="ok">Guardar</button>${r ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
+  ${r ? `<button class="s" style="width:100%;margin-bottom:8px" id="si">📤 Compartir este ítem</button>` : ""}<div class="row"><button class="grow" id="ok">Guardar</button>${r ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
   $("rq").oninput = $("rv").oninput = () => $("rt").textContent = money((+$("rq").value || 0) * (+$("rv").value || 0));
   $("ok").onclick = async () => {
     let lk = $("rl").value.trim(); if (lk && !/^https?:\/\//i.test(lk)) lk = "https://" + lk;
@@ -295,7 +319,7 @@ function regForm(r) {
     if (!fail(res.error)) { close(); openProject(S.p); }
   };
   if (r) {
-    $("up").onclick = () => moverItem(r, -1); $("dn").onclick = () => moverItem(r, 1);
+    $("si").onclick = () => compartirItem(r); $("up").onclick = () => moverItem(r, -1); $("dn").onclick = () => moverItem(r, 1);
     $("del").onclick = async () => {
       if (!confirm("¿Eliminar ítem? Queda en la papelera.")) return;
       const res = await db.from("registro").update({ activo: false, fecha_eliminacion: new Date().toISOString() }).eq("id", r.id);
@@ -362,18 +386,132 @@ async function duplicar(p) {
   close(); home();
 }
 
+function datosSalida() {
+  const e = evaluar(), lista = e.lista, P = Number(S.p.valor_inicial);
+  const bought = lista.filter(r => r.comprado), ok = lista.filter(r => r._ok && !r.comprado), no = lista.filter(r => !r._ok);
+  const ah = Number(S.p.ahorro_mensual) || 0, cuando = {};
+  if (ah > 0) { let cum = 0; no.forEach(r => { cum += Number(r.valor); const m = Math.ceil(Math.max(0, cum - e.saldo) / ah), d = new Date(); d.setMonth(d.getMonth() + m); cuando[r.id] = `~${m} ${m === 1 ? "mes" : "meses"} (${d.toLocaleDateString("es-AR", { month: "short", year: "numeric" })})`; }); }
+  const cat = id => S.cats.find(c => c.id === id)?.descripcion || "Sin categoría", pri = id => S.pris.find(x => x.id === id)?.descripcion || "-";
+  const pc = {}; lista.filter(r => r._ok).forEach(r => pc[cat(r.categoria_id)] = (pc[cat(r.categoria_id)] || 0) + Number(r.valor));
+  const gastado = sum(bought);
+  return { P, bought, ok, no, cuando, cat, pri, gastado, porComprar: e.comprado - gastado, saldo: e.saldo, porCat: Object.entries(pc), ah, fecha: new Date().toLocaleDateString("es-AR") };
+}
+
+async function enviarArchivo(blob, nombre, tipo) {
+  const f = new File([blob], nombre, { type: tipo });
+  try { if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: nombre }); else { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nombre; a.click(); } } catch (e) {}
+}
+
 function compartir() {
-  modal(`<h3>📤 Compartir</h3><button style="width:100%;margin-bottom:8px" id="c1">Enviar resumen como texto</button><button class="s" style="width:100%" id="c2">Archivo para Excel (CSV)</button>`, null, "Cerrar");
-  $("c1").onclick = () => { close(); compartirTexto(); }; $("c2").onclick = () => { close(); exportarCsv(); };
+  modal(`<h3>📤 Compartir</h3>
+  <button style="width:100%;margin-bottom:8px" id="c3">📄 Informe en PDF</button>
+  <button class="s" style="width:100%;margin-bottom:8px" id="c1">💬 Resumen como texto</button>
+  <button class="s" style="width:100%" id="c2">📊 Planilla para Excel (CSV)</button>`, null, "Cerrar");
+  $("c1").onclick = () => { close(); compartirTexto(); }; $("c2").onclick = () => { close(); exportarCsv(); }; $("c3").onclick = () => { close(); exportarPdf(); };
 }
 
 async function exportarCsv() {
-  const { lista } = evaluar(), cat = id => S.cats.find(c => c.id === id)?.descripcion || "", pri = id => S.pris.find(x => x.id === id)?.descripcion || "";
-  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`, est = r => r.comprado ? "Comprado" : r._ok ? "Por comprar" : "No alcanza";
-  const rows = [["Estado", "Descripción", "Categoría", "Prioridad", "Cantidad", "Precio unitario", "Total", "Nota", "Link"], ...lista.map(r => [est(r), r.descripcion, cat(r.categoria_id), pri(r.prioridad_id), r.cantidad ?? 1, r.precio_unitario ?? r.valor, r.valor, r.nota, r.link])];
-  const blob = new Blob(["\uFEFF" + rows.map(r => r.map(q).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
-  const f = new File([blob], `${S.p.descripcion}.csv`, { type: "text/csv" });
-  try { if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: S.p.descripcion }); else { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = f.name; a.click(); } } catch (e) {}
+  const D = datosSalida(), num = n => String(Math.round(Number(n) * 100) / 100).replace(".", ",");
+  const cell = v => v == null || v === "" ? "" : typeof v === "string" && /^-?\d+(,\d+)?$/.test(v) ? v : `"${String(v).replace(/"/g, '""')}"`;
+  const est = r => r.comprado ? "Comprado" : r._ok ? "Por comprar" : "No alcanza";
+  const rows = [["Alcanza - " + S.p.descripcion], ["Fecha", D.fecha], ["Moneda", S.p.moneda || "ARS"], ["Presupuesto", num(D.P)], ["Comprado", num(D.gastado)], ["Por comprar", num(D.porComprar)], ["Saldo", num(D.saldo)], [],
+    ["Estado", "Descripción", "Categoría", "Prioridad", "Cantidad", "Precio unitario", "Total", "Cuándo llegás", "Nota", "Link", "Fecha de compra"],
+    ...[...D.bought, ...D.ok, ...D.no].map(r => [est(r), r.descripcion, D.cat(r.categoria_id), D.pri(r.prioridad_id), num(r.cantidad ?? 1), num(r.precio_unitario ?? r.valor), num(r.valor), D.cuando[r.id] || "", r.nota, r.link, r.fecha_compra ? new Date(r.fecha_compra).toLocaleDateString("es-AR") : ""])];
+  await enviarArchivo(new Blob(["\uFEFF" + rows.map(r => r.map(cell).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" }), `Alcanza - ${S.p.descripcion}.csv`, "text/csv");
+}
+
+async function exportarPdf() {
+  if (!window.jspdf) return alert("No se pudo cargar el generador de PDF. Revisá tu conexión e intentá de nuevo.");
+  const D = datosSalida(), doc = new window.jspdf.jsPDF({ unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), teal = [15, 118, 110];
+  const mon = n => mm(n, S.p.moneda).replace(/[\u202f\u00a0]/g, " ");
+  const marca = (x, y, s, inv) => {
+    const k = s / 48, fg = inv ? teal : [255, 255, 255];
+    doc.setFillColor(...(inv ? [255, 255, 255] : teal)); doc.roundedRect(x, y, s, s, 12 * k, 12 * k, "F");
+    doc.setDrawColor(...fg); doc.setLineWidth(5 * k); doc.setLineCap("round"); doc.setLineJoin("round");
+    doc.lines([[7 * k, 7 * k], [15 * k, -15 * k]], x + 13 * k, y + 21 * k, [1, 1], "S");
+    doc.setFillColor(...(inv ? [170, 215, 211] : [111, 173, 168])); doc.roundedRect(x + 12 * k, y + 35 * k, 24 * k, 4 * k, 2 * k, 2 * k, "F");
+    doc.setFillColor(...fg); doc.roundedRect(x + 12 * k, y + 35 * k, 16 * k, 4 * k, 2 * k, 2 * k, "F");
+  };
+  doc.setFillColor(...teal); doc.rect(0, 0, W, 92, "F"); marca(36, 22, 48, true);
+  doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(24); doc.text("Alcanza", 96, 52);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.text("Decidí qué comprar y qué esperar", 96, 68); doc.text(D.fecha, W - 36, 52, { align: "right" });
+  doc.setTextColor(20, 24, 28); doc.setFont("helvetica", "bold"); doc.setFontSize(18); doc.text(S.p.descripcion, 36, 128, { maxWidth: W - 72 });
+  const kp = [["Presupuesto", D.P], ["Comprado", D.gastado], ["Por comprar", D.porComprar], ["Saldo", D.saldo]], bw = (W - 72 - 30) / 4;
+  kp.forEach(([t, v], i) => { const x = 36 + i * (bw + 10); doc.setFillColor(238, 246, 245); doc.roundedRect(x, 146, bw, 52, 8, 8, "F");
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(107, 114, 128); doc.text(t.toUpperCase(), x + 10, 163);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(v < 0 ? 220 : 20, v < 0 ? 38 : 24, v < 0 ? 38 : 28); doc.text(mon(v), x + 10, 184); });
+  let y = 226;
+  const asegurar = h => { if (y > H - h) { doc.addPage(); y = 50; } };
+  if (D.porCat.length) {
+    doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...teal); doc.text("Por categoría", 36, y);
+    doc.autoTable({ startY: y + 8, margin: { left: 36, right: 36, bottom: 50 }, head: [["Categoría", "Monto", "% del presupuesto"]], body: D.porCat.map(([n, v]) => [n, mon(v), (D.P ? Math.round(v / D.P * 100) : 0) + " %"]),
+      headStyles: { fillColor: teal, textColor: 255, fontSize: 9 }, styles: { fontSize: 9, cellPadding: 5 }, alternateRowStyles: { fillColor: [245, 248, 248] }, columnStyles: { 1: { halign: "right" }, 2: { halign: "right" } } });
+    y = doc.lastAutoTable.finalY + 24;
+  }
+  const qt = r => Number(r.cantidad) > 1 ? `${r.cantidad} x ${mon(r.precio_unitario ?? r.valor / r.cantidad)}` : "-";
+  [["Comprado", D.bought, [22, 163, 74]], ["Por comprar", D.ok, teal], ["No alcanza", D.no, [220, 38, 38]]].forEach(([t, a, col]) => {
+    if (!a.length) return; asegurar(120);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...col); doc.text(`${t} (${a.length})`, 36, y);
+    const est = t === "No alcanza" && D.ah > 0, head = ["Ítem", "Categoría", "Prioridad", "Cantidad", "Total", ...(est ? ["Estimación"] : [])];
+    doc.autoTable({ startY: y + 8, margin: { left: 36, right: 36, bottom: 50 }, head: [head],
+      body: a.map(r => [(r.descripcion || "(sin descripción)") + (r.nota ? "\n" + r.nota : ""), D.cat(r.categoria_id), D.pri(r.prioridad_id), qt(r), mon(r.valor), ...(est ? [D.cuando[r.id] || ""] : [])]),
+      headStyles: { fillColor: col, textColor: 255, fontSize: 9 }, styles: { fontSize: 9, cellPadding: 5 }, alternateRowStyles: { fillColor: [245, 248, 248] }, columnStyles: { 4: { halign: "right", fontStyle: "bold" } } });
+    y = doc.lastAutoTable.finalY + 24;
+  });
+  const n = doc.getNumberOfPages();
+  for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setDrawColor(220, 224, 228); doc.setLineWidth(0.5); doc.line(36, H - 36, W - 36, H - 36);
+    marca(36, H - 30, 16, false); doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(107, 114, 128);
+    doc.text("Generado con Alcanza", 58, H - 18); doc.text(`Página ${i} de ${n}`, W - 36, H - 18, { align: "right" }); }
+  await enviarArchivo(doc.output("blob"), `Alcanza - ${S.p.descripcion}.pdf`, "application/pdf");
+}
+
+function marcaPdf(doc, x, y, s, inv) {
+  const k = s / 48, teal = [15, 118, 110], fg = inv ? teal : [255, 255, 255];
+  doc.setFillColor(...(inv ? [255, 255, 255] : teal)); doc.roundedRect(x, y, s, s, 12 * k, 12 * k, "F");
+  doc.setDrawColor(...fg); doc.setLineWidth(5 * k); doc.setLineCap("round"); doc.setLineJoin("round");
+  doc.lines([[7 * k, 7 * k], [15 * k, -15 * k]], x + 13 * k, y + 21 * k, [1, 1], "S");
+  doc.setFillColor(...(inv ? [170, 215, 211] : [111, 173, 168])); doc.roundedRect(x + 12 * k, y + 35 * k, 24 * k, 4 * k, 2 * k, 2 * k, "F");
+  doc.setFillColor(...fg); doc.roundedRect(x + 12 * k, y + 35 * k, 16 * k, 4 * k, 2 * k, 2 * k, "F");
+}
+
+function datosItem(r) {
+  const D = datosSalida(), est = r.comprado ? "Comprado" : r._ok ? "Por comprar" : "No alcanza";
+  const cant = Number(r.cantidad) > 1 ? `${r.cantidad} × ${money(r.precio_unitario ?? r.valor / r.cantidad)}` : "";
+  return { D, est, cant, cat: D.cat(r.categoria_id), pri: D.pri(r.prioridad_id), cuando: D.cuando[r.id] || "" };
+}
+
+function compartirItem(r) {
+  modal(`<h3>📤 Compartir ítem</h3><p class="mu">${esc(r.descripcion)}</p>
+  <button style="width:100%;margin-bottom:8px" id="i3">📄 Ficha en PDF</button><button class="s" style="width:100%" id="i1">💬 Texto</button>`, null, "Cerrar");
+  $("i1").onclick = async () => {
+    close(); const d = datosItem(r);
+    const t = `✅ ALCANZA · ${S.p.descripcion}\n\n${r.descripcion || "(sin descripción)"}\n💰 ${money(r.valor)}${d.cant ? " (" + d.cant + ")" : ""}\n🏷 ${d.cat} · ${d.pri}\n📌 ${d.est}${d.cuando ? "\n📅 " + d.cuando : ""}${r.nota ? "\n📝 " + r.nota : ""}${r.link ? "\n🔗 " + r.link : ""}`;
+    try { if (navigator.share) await navigator.share({ title: r.descripcion, text: t }); else { await navigator.clipboard.writeText(t); alert("Copiado al portapapeles"); } } catch (e) {}
+  };
+  $("i3").onclick = () => { close(); fichaPdf(r); };
+}
+
+async function fichaPdf(r) {
+  if (!window.jspdf) return alert("No se pudo cargar el generador de PDF. Revisá tu conexión e intentá de nuevo.");
+  const d = datosItem(r), doc = new window.jspdf.jsPDF({ unit: "pt", format: "a4" }), teal = [15, 118, 110];
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), mon = n => mm(n, S.p.moneda).replace(/[\u202f\u00a0]/g, " ");
+  doc.setFillColor(...teal); doc.rect(0, 0, W, 92, "F"); marcaPdf(doc, 36, 22, 48, true);
+  doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(24); doc.text("Alcanza", 96, 52);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.text("Ficha de ítem", 96, 68); doc.text(d.D.fecha, W - 36, 52, { align: "right" });
+  doc.setTextColor(107, 114, 128); doc.setFontSize(10); doc.text(S.p.descripcion, 36, 124, { maxWidth: W - 72 });
+  doc.setTextColor(20, 24, 28); doc.setFont("helvetica", "bold"); doc.setFontSize(20); doc.text(r.descripcion || "(sin descripción)", 36, 148, { maxWidth: W - 72 });
+  const col = r.comprado ? [22, 163, 74] : r._ok ? teal : [220, 38, 38];
+  doc.setFillColor(238, 246, 245); doc.roundedRect(36, 176, W - 72, 70, 10, 10, "F");
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(107, 114, 128); doc.text("TOTAL", 52, 196);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(26); doc.setTextColor(...teal); doc.text(mon(r.valor), 52, 228);
+  doc.setFillColor(...col); doc.roundedRect(W - 156, 196, 104, 26, 13, 13, "F"); doc.setTextColor(255, 255, 255); doc.setFontSize(10); doc.text(d.est, W - 104, 213, { align: "center" });
+  const filas = [["Categoría", d.cat], ["Prioridad", d.pri], ["Cantidad", String(r.cantidad ?? 1)], ["Precio unitario", mon(r.precio_unitario ?? r.valor)]];
+  if (d.cuando) filas.push(["Estimación", d.cuando]); if (r.nota) filas.push(["Nota", r.nota]); if (r.link) filas.push(["Link", r.link]);
+  doc.autoTable({ startY: 268, margin: { left: 36, right: 36 }, body: filas, theme: "plain", styles: { fontSize: 11, cellPadding: 7 }, columnStyles: { 0: { textColor: [107, 114, 128], cellWidth: 120 } }, didParseCell: h => { h.cell.styles.lineColor = [225, 229, 232]; h.cell.styles.lineWidth = { bottom: 0.5 }; } });
+  doc.setDrawColor(220, 224, 228); doc.setLineWidth(0.5); doc.line(36, H - 36, W - 36, H - 36); marcaPdf(doc, 36, H - 30, 16, false);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(107, 114, 128); doc.text("Generado con Alcanza", 58, H - 18);
+  await enviarArchivo(doc.output("blob"), `Alcanza - ${r.descripcion || "item"}.pdf`, "application/pdf");
 }
 
 async function papelera() {
@@ -399,9 +537,11 @@ function simular() {
 }
 
 async function compartirTexto() {
-  const { lista, saldo } = evaluar();
-  const f = a => a.map(r => `• ${r.descripcion || "(sin descripción)"} — ${money(r.valor)}`).join("\n") || "—";
-  const t = `${S.p.descripcion}\nPresupuesto: ${money(S.p.valor_inicial)} · Saldo: ${money(saldo)}\n\n🛒 Comprado\n${f(lista.filter(r => r.comprado))}\n\n✅ Por comprar\n${f(lista.filter(r => r._ok && !r.comprado))}\n\n⛔ No alcanza\n${f(lista.filter(r => !r._ok))}`;
+  const D = datosSalida();
+  const L = a => a.map(r => `• ${r.descripcion || "(sin descripción)"}${Number(r.cantidad) > 1 ? ` (${r.cantidad} × ${money(r.precio_unitario ?? r.valor / r.cantidad)})` : ""} — ${money(r.valor)}\n   ${D.cat(r.categoria_id)} · ${D.pri(r.prioridad_id)}${D.cuando[r.id] ? " · 📅 " + D.cuando[r.id] : ""}${r.nota ? "\n   📝 " + r.nota : ""}`).join("\n") || "—";
+  const t = `✅ ALCANZA · ${S.p.descripcion}\n${D.fecha}\n\n💰 Presupuesto: ${money(D.P)}\n🛒 Comprado: ${money(D.gastado)}\n🧾 Por comprar: ${money(D.porComprar)}\n💼 Saldo: ${money(D.saldo)}\n`
+    + (D.bought.length ? `\n🛒 COMPRADO (${D.bought.length})\n${L(D.bought)}\n` : "")
+    + `\n✅ POR COMPRAR (${D.ok.length})\n${L(D.ok)}\n\n⛔ NO ALCANZA (${D.no.length})\n${L(D.no)}\n\nGenerado con Alcanza`;
   try { if (navigator.share) await navigator.share({ title: S.p.descripcion, text: t }); else { await navigator.clipboard.writeText(t); alert("Copiado al portapapeles"); } } catch (e) {}
 }
 
@@ -521,6 +661,9 @@ function itemForm(t, x) {
 }
 function close() { $("modal").innerHTML = ""; }
 
+window.addEventListener("online", () => { $("off").hidden = true; });
+window.addEventListener("offline", () => { $("off").hidden = false; });
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 init();
 </script>
 </body>
