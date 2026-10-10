@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Presupuesto">
+<meta name="theme-color" content="#0f766e">
+<title>Presupuesto</title>
+<style>
+:root{--bg:#f5f6f7;--card:#fff;--tx:#14181c;--mu:#6b7280;--ln:#e5e7eb;--ac:#0f766e;--ok:#16a34a;--no:#dc2626}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1113;--card:#1a1e22;--tx:#f1f3f5;--mu:#9aa3ad;--ln:#2b3137;--ac:#2dd4bf}}
+*{box-sizing:border-box}
+body{margin:0;font:16px -apple-system,system-ui,sans-serif;background:var(--bg);color:var(--tx);padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{position:sticky;top:0;background:var(--bg);padding:12px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--ln);z-index:5}
+header h1{font-size:18px;margin:0;flex:1}
+main{padding:12px 16px 90px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:12px;padding:12px;margin-bottom:10px}
+.row{display:flex;align-items:center;gap:10px}
+.grow{flex:1;min-width:0}
+.mu{color:var(--mu);font-size:13px}
+.big{font-size:22px;font-weight:700}
+button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--ac);color:#fff;font-weight:600}
+button.s{background:var(--card);color:var(--tx);border:1px solid var(--ln)}
+button.d{background:var(--no)}
+input,select{font:inherit;width:100%;padding:11px;border:1px solid var(--ln);border-radius:10px;background:var(--card);color:var(--tx);margin:4px 0 10px}
+label{font-size:13px;color:var(--mu)}
+.dot{width:12px;height:12px;border-radius:50%;flex:none}
+.ok{background:var(--ok)}.no{background:var(--no)}
+.tag{font-size:12px;padding:2px 8px;border-radius:99px;color:#fff}
+.fab{position:fixed;right:16px;bottom:calc(16px + env(safe-area-inset-bottom));border-radius:99px;padding:14px 20px;box-shadow:0 4px 14px #0004}
+.modal{position:fixed;inset:0;background:#0007;display:flex;align-items:flex-end;z-index:9}
+.sheet{background:var(--bg);width:100%;max-height:92%;overflow:auto;border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
+.bar{height:8px;background:var(--ln);border-radius:9px;overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;background:var(--ac)}
+.chk{display:flex;align-items:center;gap:8px;margin-bottom:12px}.chk input{width:auto;margin:0}
+.lbl{font-size:12px;font-weight:700;color:var(--mu);margin:14px 0 6px;text-transform:uppercase}
+</style>
+</head>
+<body>
+<header id="hd"></header>
+<main id="app"></main>
+<div id="modal"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+const SUPABASE_URL = "https://azaeasfifcamwqqlfztb.supabase.co";
+const SUPABASE_KEY = "sb_publishable_4__2tHY6qNwif2xQNg6sKw_TtnZE6X2";
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const S = { cats: [], pris: [], proys: [], p: null, regs: [] };
+const $ = id => document.getElementById(id);
+const money = n => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n || 0);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fail = e => { if (e) { alert(e.message || e); return true; } };
+
+async function init() {
+  const { data } = await db.auth.getSession();
+  data.session ? await home() : login();
+}
+
+function login() {
+  $("hd").innerHTML = "<h1>Ingresar</h1>";
+  $("app").innerHTML = `<div class="card"><label>Email</label><input id="em" type="email" autocomplete="email">
+  <label>Contraseña</label><input id="pw" type="password" autocomplete="current-password">
+  <div class="row"><button class="grow" id="bi">Ingresar</button><button class="s grow" id="br">Crear cuenta</button></div></div>`;
+  $("bi").onclick = async () => { const { error } = await db.auth.signInWithPassword({ email: $("em").value, password: $("pw").value }); if (!fail(error)) home(); };
+  $("br").onclick = async () => { const { error } = await db.auth.signUp({ email: $("em").value, password: $("pw").value }); if (!fail(error)) { alert("Cuenta creada. Si pide confirmar el email, revisá tu correo y luego ingresá."); } };
+}
+
+async function loadCats() {
+  const [c, p] = await Promise.all([db.from("categoria").select("*").order("orden"), db.from("prioridad").select("*").order("nivel")]);
+  if (fail(c.error) || fail(p.error)) return;
+  S.cats = c.data; S.pris = p.data;
+}
+
+async function home() {
+  await loadCats();
+  const { data, error } = await db.from("proyecto").select("*").eq("activo", true).order("fecha_creado", { ascending: false });
+  if (fail(error)) return;
+  S.proys = data; S.p = null;
+  $("hd").innerHTML = `<h1>Mis proyectos</h1><button class="s" id="lo">Salir</button>`;
+  $("lo").onclick = async () => { await db.auth.signOut(); login(); };
+  $("app").innerHTML = (data.length ? data.map(p => `<div class="card row" data-p="${p.id}"><div class="grow"><b>${esc(p.descripcion)}</b><div class="mu">Presupuesto ${money(p.valor_inicial)}</div></div><span>›</span></div>`).join("") : `<p class="mu">Todavía no tenés proyectos.</p>`)
+    + `<button class="fab" id="np">+ Proyecto</button>`;
+  document.querySelectorAll("[data-p]").forEach(el => el.onclick = () => openProject(S.proys.find(x => x.id == el.dataset.p)));
+  $("np").onclick = () => projForm();
+}
+
+function projForm(p) {
+  modal(`<h3>${p ? "Editar" : "Nuevo"} proyecto</h3>
+  <label>Descripción</label><input id="pd" value="${esc(p?.descripcion)}">
+  <label>Presupuesto</label><input id="pv" type="number" inputmode="decimal" value="${p?.valor_inicial ?? ""}">
+  <div class="row"><button class="grow" id="ok">Guardar</button>${p ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
+  $("ok").onclick = async () => {
+    const o = { descripcion: $("pd").value.trim(), valor_inicial: +$("pv").value || 0 };
+    if (!o.descripcion) return alert("Falta la descripción");
+    const r = p ? await db.from("proyecto").update(o).eq("id", p.id) : await db.from("proyecto").insert({ ...o, activo: true });
+    if (fail(r.error)) return; close(); p ? openProject({ ...p, ...o }) : home();
+  };
+  if (p) $("del").onclick = async () => {
+    if (!confirm("¿Eliminar el proyecto? Se conserva como inactivo.")) return;
+    const r = await db.from("proyecto").update({ activo: false, fecha_eliminado: new Date().toISOString() }).eq("id", p.id);
+    if (!fail(r.error)) { close(); home(); }
+  };
+}
+
+async function openProject(p) {
+  S.p = p;
+  const { data, error } = await db.from("registro").select("*").eq("proyecto_id", p.id).eq("activo", true);
+  if (fail(error)) return;
+  S.regs = data; drawProject();
+}
+
+// Evaluación: fijos primero; luego orden categoría → prioridad → ordenamiento; compra lo que entra (salteo)
+function evaluar() {
+  const co = id => S.cats.find(c => c.id === id)?.orden ?? 999;
+  const pn = id => S.pris.find(x => x.id === id)?.nivel ?? 999;
+  const lista = [...S.regs].sort((a, b) => co(a.categoria_id) - co(b.categoria_id) || pn(a.prioridad_id) - pn(b.prioridad_id) || a.ordenamiento - b.ordenamiento || a.id - b.id);
+  let saldo = Number(S.p.valor_inicial) - lista.filter(r => r.fijo).reduce((s, r) => s + Number(r.valor), 0);
+  const fijosExceden = saldo < 0;
+  lista.forEach(r => {
+    if (r.fijo) r._ok = true;
+    else if (Number(r.valor) <= saldo) { r._ok = true; saldo -= Number(r.valor); }
+    else r._ok = false;
+  });
+  const comprado = lista.filter(r => r._ok).reduce((s, r) => s + Number(r.valor), 0);
+  return { lista, comprado, saldo: Number(S.p.valor_inicial) - comprado, fijosExceden };
+}
+
+function drawProject() {
+  const { lista, comprado, saldo, fijosExceden } = evaluar();
+  const total = S.regs.reduce((s, r) => s + Number(r.valor), 0);
+  const pct = Math.min(100, S.p.valor_inicial ? comprado / S.p.valor_inicial * 100 : 0);
+  $("hd").innerHTML = `<button class="s" id="bk">‹</button><h1>${esc(S.p.descripcion)}</h1><button class="s" id="ep">Editar</button>`;
+  $("bk").onclick = home; $("ep").onclick = () => projForm(S.p);
+  const cat = id => S.cats.find(c => c.id === id), pri = id => S.pris.find(x => x.id === id);
+  const ok = lista.filter(r => r._ok), no = lista.filter(r => !r._ok);
+  const item = r => { const c = cat(r.categoria_id); return `<div class="card row" data-r="${r.id}"><span class="dot ${r._ok ? "ok" : "no"}"></span>
+    <div class="grow"><b>${r.fijo ? "📌 " : ""}${esc(r.descripcion) || "(sin descripción)"}</b>
+    <div class="mu">${c ? `<span class="tag" style="background:${esc(c.color)}">${esc(c.descripcion)}</span> ` : ""}${esc(pri(r.prioridad_id)?.descripcion || "")}</div></div>
+    <b>${money(r.valor)}</b></div>`; };
+  $("app").innerHTML = `<div class="card"><div class="mu">Presupuesto</div><div class="big">${money(S.p.valor_inicial)}</div>
+    <div class="bar"><i style="width:${pct}%"></i></div>
+    <div class="row" style="margin-top:8px"><div class="grow"><div class="mu">Se compra</div><b>${money(comprado)}</b></div>
+    <div class="grow"><div class="mu">Saldo</div><b>${money(saldo)}</b></div>
+    <div class="grow"><div class="mu">Total cargado</div><b>${money(total)}</b></div></div>
+    ${fijosExceden ? `<p style="color:var(--no)">⚠ Los ítems fijados superan el presupuesto.</p>` : ""}</div>
+    <div class="lbl">✅ Se puede comprar (${ok.length})</div>${ok.map(item).join("") || `<p class="mu">Nada por ahora.</p>`}
+    <div class="lbl">⛔ No alcanza (${no.length})</div>${no.map(item).join("") || `<p class="mu">Todo entra.</p>`}
+    <button class="fab" id="nr">+ Ítem</button>`;
+  document.querySelectorAll("[data-r]").forEach(el => el.onclick = () => regForm(S.regs.find(x => x.id == el.dataset.r)));
+  $("nr").onclick = () => regForm();
+}
+
+function regForm(r) {
+  const opts = (arr, sel) => `<option value="">—</option>` + arr.map(x => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(x.descripcion)}</option>`).join("");
+  modal(`<h3>${r ? "Editar" : "Nuevo"} ítem</h3>
+  <label>Descripción</label><input id="rd" value="${esc(r?.descripcion)}">
+  <label>Costo</label><input id="rv" type="number" inputmode="decimal" value="${r?.valor ?? ""}">
+  <label>Categoría</label><select id="rc">${opts(S.cats, r?.categoria_id)}</select>
+  <label>Prioridad</label><select id="rp">${opts(S.pris, r?.prioridad_id)}</select>
+  <div class="chk"><input id="rf" type="checkbox" ${r?.fijo ? "checked" : ""}><label for="rf" style="font-size:16px;color:var(--tx)">📌 Fijar: se compra sí o sí</label></div>
+  <div class="row"><button class="grow" id="ok">Guardar</button>${r ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
+  $("ok").onclick = async () => {
+    const o = { descripcion: $("rd").value.trim(), valor: +$("rv").value || 0, categoria_id: +$("rc").value || null, prioridad_id: +$("rp").value || null, fijo: $("rf").checked };
+    const res = r ? await db.from("registro").update(o).eq("id", r.id) : await db.from("registro").insert({ ...o, proyecto_id: S.p.id, activo: true });
+    if (!fail(res.error)) { close(); openProject(S.p); }
+  };
+  if (r) $("del").onclick = async () => {
+    if (!confirm("¿Eliminar ítem? Se conserva como inactivo.")) return;
+    const res = await db.from("registro").update({ activo: false, fecha_eliminacion: new Date().toISOString() }).eq("id", r.id);
+    if (!fail(res.error)) { close(); openProject(S.p); }
+  };
+}
+
+function modal(html) {
+  $("modal").innerHTML = `<div class="modal"><div class="sheet">${html}<button class="s" style="width:100%;margin-top:10px" id="cx">Cancelar</button></div></div>`;
+  $("cx").onclick = close;
+}
+function close() { $("modal").innerHTML = ""; }
+
+init();
+</script>
+</body>
+</html>
