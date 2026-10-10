@@ -112,48 +112,63 @@ async function openProject(p) {
 }
 
 // Evaluación: fijos primero; luego orden categoría → prioridad → ordenamiento; compra lo que entra (salteo)
-function evaluar() {
+function evaluar(P = Number(S.p.valor_inicial)) {
   const co = id => S.cats.find(c => c.id === id)?.orden ?? 999;
   const pn = id => S.pris.find(x => x.id === id)?.nivel ?? 999;
   const lista = [...S.regs].sort((a, b) => co(a.categoria_id) - co(b.categoria_id) || pn(a.prioridad_id) - pn(b.prioridad_id) || a.ordenamiento - b.ordenamiento || a.id - b.id);
-  let saldo = Number(S.p.valor_inicial) - lista.filter(r => r.fijo).reduce((s, r) => s + Number(r.valor), 0);
+  const dura = r => r.fijo || r.comprado;
+  let saldo = P - lista.filter(dura).reduce((s, r) => s + Number(r.valor), 0);
   const fijosExceden = saldo < 0;
   lista.forEach(r => {
-    if (r.fijo) r._ok = true;
+    if (dura(r)) r._ok = true;
     else if (Number(r.valor) <= saldo) { r._ok = true; saldo -= Number(r.valor); }
     else r._ok = false;
   });
   const comprado = lista.filter(r => r._ok).reduce((s, r) => s + Number(r.valor), 0);
-  return { lista, comprado, saldo: Number(S.p.valor_inicial) - comprado, fijosExceden };
+  return { lista, comprado, saldo: P - comprado, fijosExceden };
 }
+
+const sum = a => a.reduce((s, r) => s + Number(r.valor), 0);
+const liR = a => a.map(r => `<div class="row" style="padding:3px 0"><span class="grow">${esc(r.descripcion) || "(sin descripción)"}</span><b>${money(r.valor)}</b></div>`).join("");
 
 function drawProject() {
   const { lista, comprado, saldo, fijosExceden } = evaluar();
-  const total = S.regs.reduce((s, r) => s + Number(r.valor), 0);
-  const pct = Math.min(100, S.p.valor_inicial ? comprado / S.p.valor_inicial * 100 : 0);
+  const P = Number(S.p.valor_inicial);
+  const bought = lista.filter(r => r.comprado), ok = lista.filter(r => r._ok && !r.comprado), no = lista.filter(r => !r._ok);
+  const gastado = sum(bought), pct = Math.min(100, P ? comprado / P * 100 : 0), pg = Math.min(100, P ? gastado / P * 100 : 0);
   $("hd").innerHTML = `<button class="s" id="bk">‹</button><h1>${esc(S.p.descripcion)}</h1><button class="s" id="ep">Editar</button>`;
   $("bk").onclick = home; $("ep").onclick = () => projForm(S.p);
   const cat = id => S.cats.find(c => c.id === id), pri = id => S.pris.find(x => x.id === id);
-  const ok = lista.filter(r => r._ok), no = lista.filter(r => !r._ok);
   const item = r => { const c = cat(r.categoria_id); return `<div class="card row" data-r="${r.id}"><span class="dot ${r._ok ? "ok" : "no"}"></span>
     <div class="grow"><b>${r.fijo ? "📌 " : ""}${esc(r.descripcion) || "(sin descripción)"}</b>
-    <div class="mu">${c ? `<span class="tag" style="background:${esc(c.color)}">${esc(c.descripcion)}</span> ` : ""}${esc(pri(r.prioridad_id)?.descripcion || "")}</div></div>
-    <b>${money(r.valor)}</b></div>`; };
-  $("app").innerHTML = `<div class="card"><div class="mu">Presupuesto</div><div class="big">${money(S.p.valor_inicial)}</div>
-    <div class="bar"><i style="width:${pct}%"></i></div>
-    <div class="row" style="margin-top:8px"><div class="grow"><div class="mu">Se compra</div><b>${money(comprado)}</b></div>
-    <div class="grow"><div class="mu">Saldo</div><b>${money(saldo)}</b></div>
-    <div class="grow"><div class="mu">Total cargado</div><b>${money(total)}</b></div></div>
-    ${fijosExceden ? `<p style="color:var(--no)">⚠ Los ítems fijados superan el presupuesto.</p>` : ""}</div>
+    <div class="mu">${c ? `<span class="tag" style="background:${esc(c.color)}">${esc(c.descripcion)}</span> ` : ""}${esc(pri(r.prioridad_id)?.descripcion || "")}${r.link ? ` · <a href="${esc(r.link)}" target="_blank" rel="noopener" data-lk>🔗</a>` : ""}</div>${r.nota ? `<div class="mu">📝 ${esc(r.nota)}</div>` : ""}</div>
+    <b>${money(r.valor)}</b>${r._ok ? `<button class="s" data-ck="${r.id}" style="padding:6px 10px">${r.comprado ? "↩" : "✓"}</button>` : ""}</div>`; };
+  const grupos = [...S.cats.filter(c => c.activo || lista.some(r => r.categoria_id === c.id)), { id: null, descripcion: "Sin categoría", color: "#888888" }]
+    .map(g => ({ ...g, v: sum(lista.filter(r => r._ok && (r.categoria_id ?? null) === g.id)) })).filter(g => g.v > 0);
+  $("app").innerHTML = `<div class="card"><div class="mu">Presupuesto</div><div class="big">${money(P)}</div>
+    <div class="bar" style="position:relative"><i style="width:${pct}%;opacity:.4"></i><i style="width:${pg}%;position:absolute;top:0;left:0"></i></div>
+    <div class="row" style="margin-top:8px"><div class="grow"><div class="mu">🛒 Comprado</div><b>${money(gastado)}</b></div>
+    <div class="grow"><div class="mu">Por comprar</div><b>${money(comprado - gastado)}</b></div>
+    <div class="grow"><div class="mu">Saldo</div><b>${money(saldo)}</b></div></div>
+    ${fijosExceden ? `<p style="color:var(--no)">⚠ Lo fijado o comprado supera el presupuesto.</p>` : ""}</div>
+    ${grupos.length ? `<div class="card"><div class="lbl" style="margin-top:0">Por categoría</div>${grupos.map(g => `<div style="margin-bottom:8px"><div class="row"><span class="dot" style="background:${esc(g.color)}"></span><span class="grow">${esc(g.descripcion)}</span><b>${money(g.v)}</b><span class="mu">${P ? Math.round(g.v / P * 100) : 0}%</span></div><div class="bar"><i style="width:${Math.min(100, P ? g.v / P * 100 : 0)}%;background:${esc(g.color)}"></i></div></div>`).join("")}</div>` : ""}
     <button class="s" id="cf" style="width:100%;margin-bottom:6px">⚙️ Categorías y prioridades</button>
     ${S.regs.length ? `<button class="s" id="sg" style="width:100%;margin-bottom:6px">✨ Sugerir alternativa</button>` : ""}
-    <div class="lbl">✅ Se puede comprar (${ok.length})</div>${ok.map(item).join("") || `<p class="mu">Nada por ahora.</p>`}
+    <div class="row" style="margin-bottom:10px"><button class="s grow" id="sm">🎚 Simular</button><button class="s grow" id="sh">📤 Compartir</button><button class="s grow" id="tr">🗑 Papelera</button></div>
+    ${bought.length ? `<div class="lbl">🛒 Comprado (${bought.length})</div>${bought.map(item).join("")}` : ""}
+    <div class="lbl">✅ Por comprar (${ok.length})</div>${ok.map(item).join("") || `<p class="mu">Nada por ahora.</p>`}
     <div class="lbl">⛔ No alcanza (${no.length})</div>${no.map(item).join("") || `<p class="mu">Todo entra.</p>`}
     <button class="fab" id="nr">+ Ítem</button>`;
   document.querySelectorAll("[data-r]").forEach(el => el.onclick = () => regForm(S.regs.find(x => x.id == el.dataset.r)));
-  $("nr").onclick = () => regForm();
+  document.querySelectorAll("[data-lk]").forEach(a => a.onclick = e => e.stopPropagation());
+  document.querySelectorAll("[data-ck]").forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    const r = S.regs.find(x => x.id == b.dataset.ck), v = !r.comprado;
+    const res = await db.from("registro").update({ comprado: v, fecha_compra: v ? new Date().toISOString() : null }).eq("id", r.id);
+    if (!fail(res.error)) openProject(S.p);
+  });
+  $("nr").onclick = () => regForm(); $("cf").onclick = config; $("sm").onclick = simular; $("sh").onclick = compartir; $("tr").onclick = papelera;
   if ($("sg")) $("sg").onclick = sugerir;
-  $("cf").onclick = config;
 }
 
 function regForm(r) {
@@ -163,18 +178,65 @@ function regForm(r) {
   <label>Costo</label><input id="rv" type="number" inputmode="decimal" value="${r?.valor ?? ""}">
   <label>Categoría</label><select id="rc">${opts(S.cats, r?.categoria_id)}</select>
   <label>Prioridad</label><select id="rp">${opts(S.pris, r?.prioridad_id)}</select>
+  <label>Nota</label><input id="rn" value="${esc(r?.nota)}">
+  <label>Link (tienda, cotización)</label><input id="rl" inputmode="url" value="${esc(r?.link)}">
   <div class="chk"><input id="rf" type="checkbox" ${r?.fijo ? "checked" : ""}><label for="rf" style="font-size:16px;color:var(--tx)">📌 Fijar: se compra sí o sí</label></div>
+  <div class="chk"><input id="rb" type="checkbox" ${r?.comprado ? "checked" : ""}><label for="rb" style="font-size:16px;color:var(--tx)">🛒 Ya lo compré</label></div>
+  ${r ? `<div class="row" style="margin-bottom:12px"><span class="grow mu">Orden dentro de su grupo</span><button class="s" id="up">▲</button><button class="s" id="dn">▼</button></div>` : ""}
   <div class="row"><button class="grow" id="ok">Guardar</button>${r ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
   $("ok").onclick = async () => {
-    const o = { descripcion: $("rd").value.trim(), valor: +$("rv").value || 0, categoria_id: +$("rc").value || null, prioridad_id: +$("rp").value || null, fijo: $("rf").checked };
+    let lk = $("rl").value.trim(); if (lk && !/^https?:\/\//i.test(lk)) lk = "https://" + lk;
+    const cb = $("rb").checked;
+    const o = { descripcion: $("rd").value.trim(), valor: +$("rv").value || 0, categoria_id: +$("rc").value || null, prioridad_id: +$("rp").value || null, fijo: $("rf").checked,
+      nota: $("rn").value.trim() || null, link: lk || null, comprado: cb, fecha_compra: cb ? (r?.fecha_compra || new Date().toISOString()) : null };
     const res = r ? await db.from("registro").update(o).eq("id", r.id) : await db.from("registro").insert({ ...o, proyecto_id: S.p.id, activo: true });
     if (!fail(res.error)) { close(); openProject(S.p); }
   };
-  if (r) $("del").onclick = async () => {
-    if (!confirm("¿Eliminar ítem? Se conserva como inactivo.")) return;
-    const res = await db.from("registro").update({ activo: false, fecha_eliminacion: new Date().toISOString() }).eq("id", r.id);
+  if (r) {
+    $("up").onclick = () => moverItem(r, -1); $("dn").onclick = () => moverItem(r, 1);
+    $("del").onclick = async () => {
+      if (!confirm("¿Eliminar ítem? Queda en la papelera.")) return;
+      const res = await db.from("registro").update({ activo: false, fecha_eliminacion: new Date().toISOString() }).eq("id", r.id);
+      if (!fail(res.error)) { close(); openProject(S.p); }
+    };
+  }
+}
+
+async function moverItem(r, d) {
+  const g = S.regs.filter(x => x.categoria_id === r.categoria_id && x.prioridad_id === r.prioridad_id).sort((a, b) => a.ordenamiento - b.ordenamiento);
+  const o = g[g.findIndex(x => x.id === r.id) + d]; if (!o) return;
+  const rs = await Promise.all([db.from("registro").update({ ordenamiento: o.ordenamiento }).eq("id", r.id), db.from("registro").update({ ordenamiento: r.ordenamiento }).eq("id", o.id)]);
+  const er = rs.find(x => x.error); if (er) return fail(er.error);
+  close(); openProject(S.p);
+}
+
+async function papelera() {
+  const { data, error } = await db.from("registro").select("*").eq("proyecto_id", S.p.id).eq("activo", false).order("fecha_eliminacion", { ascending: false });
+  if (fail(error)) return;
+  modal(`<h3>🗑 Papelera</h3>${data.length ? data.map(r => `<div class="card row"><div class="grow"><b>${esc(r.descripcion) || "(sin descripción)"}</b><div class="mu">${money(r.valor)} · ${r.fecha_eliminacion ? new Date(r.fecha_eliminacion).toLocaleDateString("es-AR") : ""}</div></div><button data-rs="${r.id}">Restaurar</button></div>`).join("") : `<p class="mu">La papelera está vacía.</p>`}`, null, "Cerrar");
+  document.querySelectorAll("[data-rs]").forEach(b => b.onclick = async () => {
+    const res = await db.from("registro").update({ activo: true, fecha_eliminacion: null }).eq("id", b.dataset.rs);
     if (!fail(res.error)) { close(); openProject(S.p); }
+  });
+}
+
+function simular() {
+  const P = Number(S.p.valor_inicial), base = new Set(evaluar().lista.filter(r => r._ok).map(r => r.id));
+  modal(`<h3>🎚 Simular presupuesto</h3><div class="big" id="sp"></div><input id="sl" type="range" min="-50" max="50" step="5" value="0" style="padding:0"><div id="sr"></div>`, null, "Cerrar");
+  const calc = () => {
+    const k = +$("sl").value, P2 = P * (1 + k / 100), e = evaluar(P2), ids = new Set(e.lista.filter(r => r._ok).map(r => r.id));
+    const en = e.lista.filter(r => ids.has(r.id) && !base.has(r.id)), sa = e.lista.filter(r => !ids.has(r.id) && base.has(r.id));
+    $("sp").textContent = `${money(P2)} (${k > 0 ? "+" : ""}${k}%)`;
+    $("sr").innerHTML = `<p class="mu">Se compran ${ids.size} ítems (hoy ${base.size}) · saldo ${money(e.saldo)}</p>` + (en.length ? `<div class="lbl">➕ Entrarían</div>${liR(en)}` : "") + (sa.length ? `<div class="lbl">➖ Saldrían</div>${liR(sa)}` : "") + (en.length || sa.length ? "" : `<p class="mu">Sin cambios.</p>`);
   };
+  $("sl").oninput = calc; calc();
+}
+
+async function compartir() {
+  const { lista, saldo } = evaluar();
+  const f = a => a.map(r => `• ${r.descripcion || "(sin descripción)"} — ${money(r.valor)}`).join("\n") || "—";
+  const t = `${S.p.descripcion}\nPresupuesto: ${money(S.p.valor_inicial)} · Saldo: ${money(saldo)}\n\n🛒 Comprado\n${f(lista.filter(r => r.comprado))}\n\n✅ Por comprar\n${f(lista.filter(r => r._ok && !r.comprado))}\n\n⛔ No alcanza\n${f(lista.filter(r => !r._ok))}`;
+  try { if (navigator.share) await navigator.share({ title: S.p.descripcion, text: t }); else { await navigator.clipboard.writeText(t); alert("Copiado al portapapeles"); } } catch (e) {}
 }
 
 // Puntaje de un ítem: 1 + peso de prioridad + peso de categoría (Alta e Incorporación pesan más)
@@ -186,7 +248,7 @@ function puntos(r) {
 
 // Mochila exacta: máximo puntaje con el presupuesto; a igual puntaje, menor gasto. Los fijos entran siempre.
 function optimizar() {
-  const fijos = S.regs.filter(r => r.fijo), libres = S.regs.filter(r => !r.fijo);
+  const dura = r => r.fijo || r.comprado, fijos = S.regs.filter(dura), libres = S.regs.filter(r => !dura(r));
   const cap = Number(S.p.valor_inicial) - fijos.reduce((s, r) => s + Number(r.valor), 0);
   if (cap < 0) return { fijosExceden: true };
   const it = libres.map(r => ({ r, v: puntos(r), c: Number(r.valor) }));
