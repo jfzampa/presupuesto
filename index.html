@@ -147,16 +147,18 @@ async function loadCats(pid) {
 }
 
 async function home() {
+  S.uid = (await db.auth.getSession()).data.session?.user.id;
   const { data, error } = await db.from("proyecto").select("*").eq("activo", true).order("fecha_creado", { ascending: false });
   if (fail(error)) return;
-  S.proys = data; S.p = null; S.f = { q: "", c: "", p: "", e: "" };
+  S.proys = data; S.p = null;
+  const mem = {}; ((await db.from("proyecto_miembro").select("proyecto_id")).data || []).forEach(m => mem[m.proyecto_id] = 1); S.f = { q: "", c: "", p: "", e: "" };
   const rg = data.length ? (await db.from("registro").select("proyecto_id,valor,comprado").eq("activo", true).in("proyecto_id", data.map(p => p.id))).data || [] : [];
   const st = {}; rg.forEach(r => { const o = st[r.proyecto_id] ||= { n: 0, g: 0 }; o.n++; if (r.comprado) o.g += Number(r.valor); });
   const mon = {}; data.forEach(p => { const c = p.moneda || "ARS", o = mon[c] ||= { tp: 0, tg: 0 }; o.tp += Number(p.valor_inicial); o.tg += st[p.id]?.g || 0; });
   $("hd").innerHTML = `<h1 class="bh">${logo(26)}Mis proyectos</h1><button class="s" id="lo">Salir</button>`;
   $("lo").onclick = async () => { await db.auth.signOut(); login(); };
   $("app").innerHTML = (data.length ? Object.entries(mon).map(([c, o]) => `<div class="kpi"><div class="l">Disponible${Object.keys(mon).length > 1 ? " (" + c + ")" : " en tus proyectos"}</div><div class="v">${mm(o.tp - o.tg, c)}</div><div class="r"><div><span class="l">Presupuesto</span><b>${mm(o.tp, c)}</b></div><div><span class="l">Comprado</span><b>${mm(o.tg, c)}</b></div></div></div>`).join("")
-    + data.map(p => { const o = st[p.id] || { n: 0, g: 0 }, P = Number(p.valor_inicial); return `<div class="card" data-p="${p.id}"><div class="row"><div class="grow"><b>${esc(p.descripcion)}</b><div class="mu">${o.n} ítems · Presupuesto ${mm(P, p.moneda)}</div></div><span>›</span></div><div class="bar"><i style="width:${Math.min(100, P ? o.g / P * 100 : 0)}%"></i></div><div class="mu" style="margin-top:6px">Comprado ${mm(o.g, p.moneda)} · Disponible ${mm(P - o.g, p.moneda)}</div></div>`; }).join("") : `<p class="mu">Todavía no tenés proyectos.</p>`)
+    + data.map(p => { const o = st[p.id] || { n: 0, g: 0 }, P = Number(p.valor_inicial); return `<div class="card" data-p="${p.id}"><div class="row"><div class="grow"><b>${esc(p.descripcion)}</b>${p.user_id !== S.uid ? ` <span class="tag" style="background:#6b7280">Compartido</span>` : mem[p.id] ? " 👥" : ""}<div class="mu">${o.n} ítems · Presupuesto ${mm(P, p.moneda)}</div></div><span>›</span></div><div class="bar"><i style="width:${Math.min(100, P ? o.g / P * 100 : 0)}%"></i></div><div class="mu" style="margin-top:6px">Comprado ${mm(o.g, p.moneda)} · Disponible ${mm(P - o.g, p.moneda)}</div></div>`; }).join("") : `<p class="mu">Todavía no tenés proyectos.</p>`)
     + `<p style="text-align:center"><a href="#" id="pt" style="color:var(--ac)">🗑 Proyectos eliminados</a></p><button class="fab" id="np">+ Proyecto</button>`;
   document.querySelectorAll("[data-p]").forEach(el => el.onclick = () => openProject(S.proys.find(x => x.id == el.dataset.p)));
   $("np").onclick = () => projForm();
@@ -169,7 +171,7 @@ function projForm(p) {
   <label>Presupuesto</label><input id="pv" type="number" inputmode="decimal" value="${p?.valor_inicial ?? ""}">
   <label>Moneda</label><select id="pm">${["ARS", "USD", "EUR", "UYU", "BRL"].map(c => `<option ${(p?.moneda || "ARS") === c ? "selected" : ""}>${c}</option>`).join("")}</select>
   <label>Ahorro mensual (opcional: estima cuándo llegás a lo que no alcanza)</label><input id="pa" type="number" inputmode="decimal" value="${p?.ahorro_mensual || ""}">
-  <div class="row"><button class="grow" id="ok">Guardar</button>${p ? `<button class="s" id="dup">Duplicar</button><button class="d" id="del">Eliminar</button>` : ""}</div>`);
+  ${p ? `<button class="s" style="width:100%;margin-bottom:8px" id="mb">👥 Compartir proyecto</button>` : ""}<div class="row"><button class="grow" id="ok">Guardar</button>${p ? `<button class="s" id="dup">Duplicar</button>${p.user_id === S.uid ? `<button class="d" id="del">Eliminar</button>` : ""}` : ""}</div>`);
   $("ok").onclick = async () => {
     const o = { descripcion: $("pd").value.trim(), valor_inicial: +$("pv").value || 0, ahorro_mensual: +$("pa").value || 0, moneda: $("pm").value };
     if (!o.descripcion) return alert("Falta la descripción");
@@ -177,7 +179,8 @@ function projForm(p) {
     if (fail(r.error)) return; close(); p ? openProject({ ...p, ...o }) : home();
   };
   if (p) $("dup").onclick = () => duplicar(p);
-  if (p) $("del").onclick = async () => {
+  if (p) $("mb").onclick = () => miembros(p);
+  if ($("del")) $("del").onclick = async () => {
     if (!confirm("¿Eliminar el proyecto? Se conserva como inactivo.")) return;
     const r = await db.from("proyecto").update({ activo: false, fecha_eliminado: new Date().toISOString() }).eq("id", p.id);
     if (!fail(r.error)) { close(); home(); }
@@ -307,6 +310,28 @@ async function moverItem(r, d) {
   const rs = await Promise.all([db.from("registro").update({ ordenamiento: o.ordenamiento }).eq("id", r.id), db.from("registro").update({ ordenamiento: r.ordenamiento }).eq("id", o.id)]);
   const er = rs.find(x => x.error); if (er) return fail(er.error);
   close(); openProject(S.p);
+}
+
+async function miembros(p) {
+  const { data, error } = await db.from("proyecto_miembro").select("*").eq("proyecto_id", p.id);
+  if (fail(error)) return;
+  const dueno = p.user_id === S.uid;
+  modal(`<h3>👥 Personas con acceso</h3><p class="mu">Todos ven y editan los mismos ítems, categorías y prioridades. Para ver los cambios de otra persona, volvé a abrir el proyecto.</p>
+  <div class="card row"><div class="grow">${dueno ? "Vos" : "Dueño del proyecto"}</div><span class="mu">Dueño</span></div>
+  ${data.map(m => `<div class="card row"><div class="grow">${esc(m.email)}${m.user_id === S.uid ? " (vos)" : ""}</div>${dueno || m.user_id === S.uid ? `<button class="s" data-rm="${m.user_id}">${dueno ? "Quitar" : "Salir"}</button>` : ""}</div>`).join("")}
+  ${dueno ? `<label>Invitar por email</label><input id="ie" type="email" inputmode="email" autocapitalize="none" placeholder="persona@email.com"><p id="im" class="mu" style="min-height:18px;color:var(--no)"></p><button style="width:100%" id="iv">Invitar</button><p class="mu">La persona tiene que haber creado antes su cuenta en Alcanza con ese email.</p>` : ""}`, null, "Cerrar");
+  document.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => {
+    const uid = b.dataset.rm;
+    if (!confirm(uid === S.uid ? "¿Salir de este proyecto?" : "¿Quitar el acceso a esta persona?")) return;
+    const res = await db.from("proyecto_miembro").delete().eq("proyecto_id", p.id).eq("user_id", uid);
+    if (fail(res.error)) return;
+    if (uid === S.uid) { close(); home(); } else miembros(p);
+  });
+  if ($("iv")) $("iv").onclick = async () => {
+    const { error } = await db.rpc("invitar", { pid: p.id, correo: $("ie").value });
+    if (error) return $("im").textContent = error.message;
+    miembros(p);
+  };
 }
 
 async function papeleraProy() {
