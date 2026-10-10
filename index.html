@@ -68,14 +68,13 @@ function login() {
   $("br").onclick = async () => { const { error } = await db.auth.signUp({ email: $("em").value, password: $("pw").value }); if (!fail(error)) { alert("Cuenta creada. Si pide confirmar el email, revisá tu correo y luego ingresá."); } };
 }
 
-async function loadCats() {
-  const [c, p] = await Promise.all([db.from("categoria").select("*").order("orden"), db.from("prioridad").select("*").order("nivel")]);
+async function loadCats(pid) {
+  const [c, p] = await Promise.all([db.from("categoria").select("*").eq("proyecto_id", pid).order("orden"), db.from("prioridad").select("*").eq("proyecto_id", pid).order("nivel")]);
   if (fail(c.error) || fail(p.error)) return;
   S.cats = c.data; S.pris = p.data;
 }
 
 async function home() {
-  await loadCats();
   const { data, error } = await db.from("proyecto").select("*").eq("activo", true).order("fecha_creado", { ascending: false });
   if (fail(error)) return;
   S.proys = data; S.p = null;
@@ -109,7 +108,7 @@ async function openProject(p) {
   S.p = p;
   const { data, error } = await db.from("registro").select("*").eq("proyecto_id", p.id).eq("activo", true);
   if (fail(error)) return;
-  S.regs = data; drawProject();
+  S.regs = data; await loadCats(p.id); drawProject();
 }
 
 // Evaluación: fijos primero; luego orden categoría → prioridad → ordenamiento; compra lo que entra (salteo)
@@ -146,6 +145,7 @@ function drawProject() {
     <div class="grow"><div class="mu">Saldo</div><b>${money(saldo)}</b></div>
     <div class="grow"><div class="mu">Total cargado</div><b>${money(total)}</b></div></div>
     ${fijosExceden ? `<p style="color:var(--no)">⚠ Los ítems fijados superan el presupuesto.</p>` : ""}</div>
+    <button class="s" id="cf" style="width:100%;margin-bottom:6px">⚙️ Categorías y prioridades</button>
     ${S.regs.length ? `<button class="s" id="sg" style="width:100%;margin-bottom:6px">✨ Sugerir alternativa</button>` : ""}
     <div class="lbl">✅ Se puede comprar (${ok.length})</div>${ok.map(item).join("") || `<p class="mu">Nada por ahora.</p>`}
     <div class="lbl">⛔ No alcanza (${no.length})</div>${no.map(item).join("") || `<p class="mu">Todo entra.</p>`}
@@ -153,10 +153,11 @@ function drawProject() {
   document.querySelectorAll("[data-r]").forEach(el => el.onclick = () => regForm(S.regs.find(x => x.id == el.dataset.r)));
   $("nr").onclick = () => regForm();
   if ($("sg")) $("sg").onclick = sugerir;
+  $("cf").onclick = config;
 }
 
 function regForm(r) {
-  const opts = (arr, sel) => `<option value="">—</option>` + arr.map(x => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(x.descripcion)}</option>`).join("");
+  const opts = (arr, sel) => `<option value="">—</option>` + arr.filter(x => x.activo || x.id === sel).map(x => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(x.descripcion)}</option>`).join("");
   modal(`<h3>${r ? "Editar" : "Nuevo"} ítem</h3>
   <label>Descripción</label><input id="rd" value="${esc(r?.descripcion)}">
   <label>Costo</label><input id="rv" type="number" inputmode="decimal" value="${r?.valor ?? ""}">
@@ -237,9 +238,58 @@ function sugerir() {
   };
 }
 
-function modal(html) {
-  $("modal").innerHTML = `<div class="modal"><div class="sheet">${html}<button class="s" style="width:100%;margin-top:10px" id="cx">Cancelar</button></div></div>`;
-  $("cx").onclick = close;
+function modal(html, back, label) {
+  $("modal").innerHTML = `<div class="modal"><div class="sheet">${html}<button class="s" style="width:100%;margin-top:10px" id="cx">${label || "Cancelar"}</button></div></div>`;
+  $("cx").onclick = back || close;
+}
+
+// ===== Categorías y prioridades por proyecto =====
+const T = { c: { tabla: "categoria", campo: "orden", S: () => S.cats, n: "categoría" }, p: { tabla: "prioridad", campo: "nivel", S: () => S.pris, n: "prioridad" } };
+
+function config() {
+  const fila = (t, x, i, n) => `<div class="card row" style="padding:8px">${t === "c" ? `<span class="dot" style="background:${esc(x.color)}"></span>` : `<b class="mu">${i + 1}</b>`}
+    <div class="grow">${esc(x.descripcion)}</div>
+    <button class="s" data-up="${t}${x.id}" ${i === 0 ? "disabled" : ""}>▲</button><button class="s" data-dn="${t}${x.id}" ${i === n - 1 ? "disabled" : ""}>▼</button><button class="s" data-ed="${t}${x.id}">✏️</button></div>`;
+  const sec = t => { const a = T[t].S().filter(x => x.activo); return a.map((x, i) => fila(t, x, i, a.length)).join("") || `<p class="mu">Sin ${T[t].n}s todavía.</p>`; };
+  modal(`<h3>Categorías y prioridades</h3><p class="mu">De arriba hacia abajo: lo primero se compra primero.</p>
+  <div class="lbl">Categorías</div>${sec("c")}<button class="s" style="width:100%" id="nc">+ Categoría</button>
+  <div class="lbl">Prioridades (1 = más alta)</div>${sec("p")}<button class="s" style="width:100%" id="np2">+ Prioridad</button>`, null, "Cerrar");
+  const get = v => ({ t: v[0], id: Number(v.slice(1)) });
+  document.querySelectorAll("[data-up]").forEach(b => b.onclick = () => { const g = get(b.dataset.up); mover(g.t, g.id, -1); });
+  document.querySelectorAll("[data-dn]").forEach(b => b.onclick = () => { const g = get(b.dataset.dn); mover(g.t, g.id, 1); });
+  document.querySelectorAll("[data-ed]").forEach(b => b.onclick = () => { const g = get(b.dataset.ed); itemForm(g.t, T[g.t].S().find(x => x.id === g.id)); });
+  $("nc").onclick = () => itemForm("c"); $("np2").onclick = () => itemForm("p");
+}
+
+async function refrescarConfig() { await loadCats(S.p.id); drawProject(); config(); }
+
+async function mover(t, id, d) {
+  const a = T[t].S().filter(x => x.activo), i = a.findIndex(x => x.id === id), j = i + d;
+  if (j < 0 || j >= a.length) return;
+  [a[i], a[j]] = [a[j], a[i]];
+  const rs = await Promise.all(a.map((x, k) => db.from(T[t].tabla).update({ [T[t].campo]: k + 1 }).eq("id", x.id)));
+  const er = rs.find(r => r.error); if (er) return fail(er.error);
+  refrescarConfig();
+}
+
+function itemForm(t, x) {
+  const c = t === "c", m = T[t];
+  modal(`<h3>${x ? "Editar" : "Nueva"} ${m.n}</h3><label>Nombre</label><input id="nm" value="${esc(x?.descripcion)}">
+  ${c ? `<label>Color</label><input id="co" type="color" value="${esc(x?.color || "#0f766e")}" style="height:48px;padding:4px">` : ""}
+  <div class="row"><button class="grow" id="ok">Guardar</button>${x ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`, config, "Volver");
+  $("ok").onclick = async () => {
+    const d = $("nm").value.trim(); if (!d) return alert("Falta el nombre");
+    const o = { descripcion: d }; if (c) o.color = $("co").value;
+    let r;
+    if (x) r = await db.from(m.tabla).update(o).eq("id", x.id);
+    else { const mx = Math.max(0, ...m.S().map(a => a[m.campo])); r = await db.from(m.tabla).insert({ ...o, [m.campo]: mx + 1, proyecto_id: S.p.id, activo: true }); }
+    if (!fail(r.error)) refrescarConfig();
+  };
+  if (x) $("del").onclick = async () => {
+    if (!confirm("¿Eliminar? Los ítems que ya la usan la conservan, pero no podrás elegirla en ítems nuevos.")) return;
+    const r = await db.from(m.tabla).update({ activo: false }).eq("id", x.id);
+    if (!fail(r.error)) refrescarConfig();
+  };
 }
 function close() { $("modal").innerHTML = ""; }
 
