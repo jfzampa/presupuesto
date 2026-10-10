@@ -174,6 +174,7 @@ async function home() {
   if (S.uid) localStorage.setItem("alc_uid", S.uid);
   const { data, error } = await db.from("proyecto").select("*").eq("activo", true).order("fecha_creado", { ascending: false });
   if (fail(error)) return;
+  const bj = ((await db.from("bandeja").select("id").eq("activo", true)).data || []).length;
   S.proys = data; S.p = null;
   const mem = {}; ((await db.from("proyecto_miembro").select("proyecto_id")).data || []).forEach(m => mem[m.proyecto_id] = 1); S.f = { q: "", c: "", p: "", e: "" };
   const rg = data.length ? (await db.from("registro").select("proyecto_id,valor,comprado").eq("activo", true).in("proyecto_id", data.map(p => p.id))).data || [] : [];
@@ -183,10 +184,11 @@ async function home() {
   $("lo").onclick = async () => { await db.auth.signOut().catch(() => {}); Object.keys(localStorage).filter(k => k.startsWith("alc")).forEach(k => localStorage.removeItem(k)); login(); };
   $("app").innerHTML = (data.length ? Object.entries(mon).map(([c, o]) => `<div class="kpi"><div class="l">Disponible${Object.keys(mon).length > 1 ? " (" + c + ")" : " en tus proyectos"}</div><div class="v">${mm(o.tp - o.tg, c)}</div><div class="r"><div><span class="l">Presupuesto</span><b>${mm(o.tp, c)}</b></div><div><span class="l">Comprado</span><b>${mm(o.tg, c)}</b></div></div></div>`).join("")
     + data.map(p => { const o = st[p.id] || { n: 0, g: 0 }, P = Number(p.valor_inicial); return `<div class="card" data-p="${p.id}"><div class="row"><div class="grow"><b>${esc(p.descripcion)}</b>${p.user_id !== S.uid ? ` <span class="tag" style="background:#6b7280">Compartido</span>` : mem[p.id] ? " 👥" : ""}<div class="mu">${o.n} ítems · Presupuesto ${mm(P, p.moneda)}</div></div><span>›</span></div><div class="bar"><i style="width:${Math.min(100, P ? o.g / P * 100 : 0)}%"></i></div><div class="mu" style="margin-top:6px">Comprado ${mm(o.g, p.moneda)} · Disponible ${mm(P - o.g, p.moneda)}</div></div>`; }).join("") : `<p class="mu">Todavía no tenés proyectos.</p>`)
-    + `<p style="text-align:center"><a href="#" id="pt" style="color:var(--ac)">🗑 Proyectos eliminados</a></p><button class="fab" id="np">+ Proyecto</button>`;
+    + `<p style="text-align:center"><a href="#" id="bj" style="color:var(--ac)">📥 Bandeja${bj ? " (" + bj + ")" : ""}</a> &nbsp;·&nbsp; <a href="#" id="pt" style="color:var(--ac)">🗑 Proyectos eliminados</a></p><button class="fab" id="np">+ Proyecto</button>`;
   document.querySelectorAll("[data-p]").forEach(el => el.onclick = () => openProject(S.proys.find(x => x.id == el.dataset.p)));
   $("np").onclick = () => projForm();
   $("pt").onclick = e => { e.preventDefault(); papeleraProy(); };
+  $("bj").onclick = e => { e.preventDefault(); bandeja(); };
 }
 
 function projForm(p) {
@@ -295,20 +297,24 @@ function drawProject() {
   if ($("sg")) $("sg").onclick = sugerir;
 }
 
-function regForm(r) {
+function regForm(r, pre) {
   const opts = (arr, sel) => `<option value="">—</option>` + arr.filter(x => x.activo || x.id === sel).map(x => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(x.descripcion)}</option>`).join("");
   modal(`<h3>${r ? "Editar" : "Nuevo"} ítem</h3>
-  <label>Descripción</label><input id="rd" value="${esc(r?.descripcion)}">
-  <div class="row"><div class="grow"><label>Cantidad</label><input id="rq" type="number" inputmode="decimal" value="${r?.cantidad ?? 1}"></div><div class="grow"><label>Precio unitario</label><input id="rv" type="number" inputmode="decimal" value="${r ? (r.precio_unitario ?? Number(r.valor) / (Number(r.cantidad) || 1)) : ""}"></div></div>
+  <label>Descripción</label><input id="rd" value="${esc(r?.descripcion ?? pre?.descripcion)}">
+  <div class="row"><div class="grow"><label>Cantidad</label><input id="rq" type="number" inputmode="decimal" value="${r?.cantidad ?? 1}"></div><div class="grow"><label>Precio unitario</label><input id="rv" type="number" inputmode="decimal" value="${r ? (r.precio_unitario ?? Number(r.valor) / (Number(r.cantidad) || 1)) : (pre?.precio ?? "")}"></div></div>
   <p class="mu" style="margin:-4px 0 10px">Total: <b id="rt">${money(r?.valor || 0)}</b></p>
   <label>Categoría</label><select id="rc">${opts(S.cats, r?.categoria_id)}</select>
   <label>Prioridad</label><select id="rp">${opts(S.pris, r?.prioridad_id)}</select>
   <label>Nota</label><input id="rn" value="${esc(r?.nota)}">
-  <label>Link (tienda, cotización)</label><input id="rl" inputmode="url" value="${esc(r?.link)}">
+  <label>Link (tienda, cotización)</label><div class="row"><input id="rl" inputmode="url" value="${esc(r?.link ?? pre?.link)}"><button class="s" id="pg" style="margin:4px 0 10px;white-space:nowrap">📋 Pegar</button></div>
   <div class="chk"><input id="rf" type="checkbox" ${r?.fijo ? "checked" : ""}><label for="rf" style="font-size:16px;color:var(--tx)">📌 Fijar: se compra sí o sí</label></div>
   <div class="chk"><input id="rb" type="checkbox" ${r?.comprado ? "checked" : ""}><label for="rb" style="font-size:16px;color:var(--tx)">🛒 Ya lo compré</label></div>
   ${r ? `<div class="row" style="margin-bottom:12px"><span class="grow mu">Orden dentro de su grupo</span><button class="s" id="up">▲</button><button class="s" id="dn">▼</button></div>` : ""}
   ${r ? `<button class="s" style="width:100%;margin-bottom:8px" id="si">📤 Compartir este ítem</button>` : ""}<div class="row"><button class="grow" id="ok">Guardar</button>${r ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
+  $("pg").onclick = async () => {
+    try { const t = (await navigator.clipboard.readText()).trim(); if (!/^https?:\/\//i.test(t)) return alert("No hay ningún link copiado."); $("rl").value = t; if (!$("rd").value.trim()) $("rd").value = guessTitulo(t); }
+    catch (e) { alert("No pude leer el portapapeles. Pegalo a mano en el campo."); }
+  };
   $("rq").oninput = $("rv").oninput = () => $("rt").textContent = money((+$("rq").value || 0) * (+$("rv").value || 0));
   $("ok").onclick = async () => {
     let lk = $("rl").value.trim(); if (lk && !/^https?:\/\//i.test(lk)) lk = "https://" + lk;
@@ -316,7 +322,7 @@ function regForm(r) {
     const o = { descripcion: $("rd").value.trim(), valor: (+$("rq").value || 1) * (+$("rv").value || 0), cantidad: +$("rq").value || 1, precio_unitario: +$("rv").value || 0, categoria_id: +$("rc").value || null, prioridad_id: +$("rp").value || null, fijo: $("rf").checked,
       nota: $("rn").value.trim() || null, link: lk || null, comprado: cb, fecha_compra: cb ? (r?.fecha_compra || new Date().toISOString()) : null };
     const res = r ? await db.from("registro").update(o).eq("id", r.id) : await db.from("registro").insert({ ...o, proyecto_id: S.p.id, activo: true });
-    if (!fail(res.error)) { close(); openProject(S.p); }
+    if (!fail(res.error)) { if (pre?.bid) await db.from("bandeja").update({ activo: false }).eq("id", pre.bid); close(); openProject(S.p); }
   };
   if (r) {
     $("si").onclick = () => compartirItem(r); $("up").onclick = () => moverItem(r, -1); $("dn").onclick = () => moverItem(r, 1);
@@ -512,6 +518,47 @@ async function fichaPdf(r) {
   doc.setDrawColor(220, 224, 228); doc.setLineWidth(0.5); doc.line(36, H - 36, W - 36, H - 36); marcaPdf(doc, 36, H - 30, 16, false);
   doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(107, 114, 128); doc.text("Generado con Alcanza", 58, H - 18);
   await enviarArchivo(doc.output("blob"), `Alcanza - ${r.descripcion || "item"}.pdf`, "application/pdf");
+}
+
+function guessTitulo(u, t) {
+  const limpiar = x => x.replace(/\s*[|·–-]\s*(mercado\s?libre|coto digital|cotodigital)[^|]*$/i, "").trim();
+  if (t && t.trim()) return limpiar(t);
+  try {
+    const seg = decodeURIComponent(new URL(u).pathname).split("/").filter(x => /[a-zA-Z]{3}/.test(x) && !/^R-\d/.test(x)).sort((a, b) => b.length - a.length)[0] || "";
+    const n = seg.replace(/^ML[A-Z]-?\d+-?/i, "").replace(/-?_JM$/i, "").replace(/[-_]+/g, " ").trim();
+    return n && /[-_]/.test(seg) ? n.charAt(0).toUpperCase() + n.slice(1) : new URL(u).hostname.replace("www.", "");
+  } catch (e) { return u; }
+}
+const hostDe = u => { try { return new URL(u).hostname.replace("www.", ""); } catch (e) { return ""; } };
+
+async function bandeja() {
+  const { data, error } = await db.from("bandeja").select("*").eq("activo", true).order("fecha", { ascending: false });
+  if (fail(error)) return;
+  modal(`<h3>📥 Bandeja</h3><p class="mu">Lo que compartís desde Mercado Libre, Coto u otra tienda llega acá. Elegí el proyecto y agregalo.</p>
+  ${data.length ? data.map(b => `<div class="card"><b>${esc(guessTitulo(b.url, b.titulo))}</b><div class="mu">${esc(hostDe(b.url))}</div>
+    <div class="row" style="margin-top:8px"><select data-pr="${b.id}" style="margin:0">${S.proys.map(p => `<option value="${p.id}">${esc(p.descripcion)}</option>`).join("")}</select><button data-ad="${b.id}">Agregar</button><button class="s" data-qt="${b.id}">✕</button></div></div>`).join("") : `<p class="mu">La bandeja está vacía.</p>`}
+  <button class="s" style="width:100%" id="cg">⚙️ Configurar el atajo de iPhone</button>`, null, "Cerrar");
+  document.querySelectorAll("[data-ad]").forEach(btn => btn.onclick = async () => {
+    const b = data.find(x => x.id == btn.dataset.ad), p = S.proys.find(x => x.id == document.querySelector(`[data-pr="${b.id}"]`).value);
+    if (!p) return alert("Primero creá un proyecto.");
+    close(); await openProject(p); regForm(null, { bid: b.id, descripcion: guessTitulo(b.url, b.titulo), link: b.url });
+  });
+  document.querySelectorAll("[data-qt]").forEach(btn => btn.onclick = async () => {
+    const res = await db.from("bandeja").update({ activo: false }).eq("id", btn.dataset.qt);
+    if (!fail(res.error)) bandeja();
+  });
+  $("cg").onclick = configAtajo;
+}
+
+async function configAtajo() {
+  let t = (await db.from("bandeja_token").select("token").maybeSingle()).data;
+  if (!t) { const r = await db.from("bandeja_token").insert({}); if (fail(r.error)) return; t = (await db.from("bandeja_token").select("token").maybeSingle()).data; }
+  if (!t) return alert("No pude obtener tu token.");
+  const d = [["Dirección (URL)", SUPABASE_URL + "/rest/v1/rpc/bandeja_agregar"], ["Clave (apikey)", SUPABASE_KEY], ["Tu token (tok)", t.token]];
+  modal(`<h3>⚙️ Atajo de iPhone</h3>
+  <p class="mu">En la app <b>Atajos</b>: nuevo atajo → ⓘ → activá <b>Mostrar en hoja para compartir</b> (solo URLs y páginas de Safari). Agregá la acción <b>Obtener contenido de URL</b>: Método <b>POST</b>; encabezados <b>apikey</b> = tu clave y <b>Content-Type</b> = application/json; cuerpo <b>JSON</b> con <b>tok</b> (Texto) = tu token, <b>u</b> (Texto) = Entrada del atajo y, opcional, <b>t</b> (Texto) = Nombre de la entrada. Después sumá <b>Mostrar notificación</b>.</p>
+  ${d.map(([n, v], i) => `<div class="card row"><div class="grow"><div class="mu">${n}</div><div style="word-break:break-all;font-size:13px">${esc(v)}</div></div><button class="s" data-cp="${i}">Copiar</button></div>`).join("")}`, bandeja, "Volver");
+  document.querySelectorAll("[data-cp]").forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText(d[b.dataset.cp][1]); b.textContent = "✓"; } catch (e) { alert("No pude copiar. Mantené apretado el texto para copiarlo."); } });
 }
 
 async function papelera() {
