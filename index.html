@@ -42,6 +42,11 @@ label{font-size:13px;color:var(--mu)}
 .kpi .l{font-size:13px;opacity:.85}.kpi .v{font-size:30px;font-weight:700;margin:2px 0 10px}
 .kpi .r{display:flex;gap:18px}.kpi .r b{display:block;font-size:16px}
 .offb{position:fixed;left:0;right:0;top:env(safe-area-inset-top,0px);background:#b45309;color:#fff;text-align:center;font-size:12px;padding:4px 8px;z-index:20}.offb[hidden]{display:none}
+.pop{position:fixed;inset:0;z-index:15}
+.pop>div{position:absolute;right:12px;top:calc(env(safe-area-inset-top,0px) + 62px);min-width:240px;background:var(--card);border:1px solid var(--ln);border-radius:14px;box-shadow:0 8px 28px #0004;padding:6px}
+.pop button{width:100%;text-align:left;background:none;color:var(--tx);border-radius:10px;padding:12px;display:flex;justify-content:space-between;align-items:center;font-weight:500}
+.pop button:active{background:var(--bg)}
+.pop hr{border:0;border-top:1px solid var(--ln);margin:4px 0}
 </style>
 </head>
 <body>
@@ -175,20 +180,19 @@ async function home() {
   const { data, error } = await db.from("proyecto").select("*").eq("activo", true).order("fecha_creado", { ascending: false });
   if (fail(error)) return;
   const bj = ((await db.from("bandeja").select("id").eq("activo", true)).data || []).length;
-  S.proys = data; S.p = null;
+  S.proys = data; S.p = null; S.bj = bj;
   const mem = {}; ((await db.from("proyecto_miembro").select("proyecto_id")).data || []).forEach(m => mem[m.proyecto_id] = 1); S.f = { q: "", c: "", p: "", e: "" };
   const rg = data.length ? (await db.from("registro").select("proyecto_id,valor,comprado").eq("activo", true).in("proyecto_id", data.map(p => p.id))).data || [] : [];
   const st = {}; rg.forEach(r => { const o = st[r.proyecto_id] ||= { n: 0, g: 0 }; o.n++; if (r.comprado) o.g += Number(r.valor); });
   const mon = {}; data.forEach(p => { const c = p.moneda || "ARS", o = mon[c] ||= { tp: 0, tg: 0 }; o.tp += Number(p.valor_inicial); o.tg += st[p.id]?.g || 0; });
-  $("hd").innerHTML = `<h1 class="bh">${logo(26)}Mis proyectos</h1><button class="s" id="lo">Salir</button>`;
+  $("hd").innerHTML = `<h1 class="bh">${logo(26)}Mis proyectos</h1><button class="s" id="mn" aria-label="Menú">☰${bj ? ` <span class="tag" style="background:var(--no)">${bj}</span>` : ""}</button><button class="s" id="lo">Salir</button>`;
   $("lo").onclick = async () => { await db.auth.signOut().catch(() => {}); Object.keys(localStorage).filter(k => k.startsWith("alc")).forEach(k => localStorage.removeItem(k)); login(); };
   $("app").innerHTML = (data.length ? Object.entries(mon).map(([c, o]) => `<div class="kpi"><div class="l">Disponible${Object.keys(mon).length > 1 ? " (" + c + ")" : " en tus proyectos"}</div><div class="v">${mm(o.tp - o.tg, c)}</div><div class="r"><div><span class="l">Presupuesto</span><b>${mm(o.tp, c)}</b></div><div><span class="l">Comprado</span><b>${mm(o.tg, c)}</b></div></div></div>`).join("")
     + data.map(p => { const o = st[p.id] || { n: 0, g: 0 }, P = Number(p.valor_inicial); return `<div class="card" data-p="${p.id}"><div class="row"><div class="grow"><b>${esc(p.descripcion)}</b>${p.user_id !== S.uid ? ` <span class="tag" style="background:#6b7280">Compartido</span>` : mem[p.id] ? " 👥" : ""}<div class="mu">${o.n} ítems · Presupuesto ${mm(P, p.moneda)}</div></div><span>›</span></div><div class="bar"><i style="width:${Math.min(100, P ? o.g / P * 100 : 0)}%"></i></div><div class="mu" style="margin-top:6px">Comprado ${mm(o.g, p.moneda)} · Disponible ${mm(P - o.g, p.moneda)}</div></div>`; }).join("") : `<p class="mu">Todavía no tenés proyectos.</p>`)
-    + `<p style="text-align:center"><a href="#" id="bj" style="color:var(--ac)">📥 Bandeja${bj ? " (" + bj + ")" : ""}</a> &nbsp;·&nbsp; <a href="#" id="pt" style="color:var(--ac)">🗑 Proyectos eliminados</a></p><button class="fab" id="np">+ Proyecto</button>`;
+    + `<button class="fab" id="np">+ Proyecto</button>`;
   document.querySelectorAll("[data-p]").forEach(el => el.onclick = () => openProject(S.proys.find(x => x.id == el.dataset.p)));
   $("np").onclick = () => projForm();
-  $("pt").onclick = e => { e.preventDefault(); papeleraProy(); };
-  $("bj").onclick = e => { e.preventDefault(); bandeja(); };
+  $("mn").onclick = menuHome;
 }
 
 function projForm(p) {
@@ -559,6 +563,37 @@ async function configAtajo() {
   <p class="mu">En la app <b>Atajos</b>: nuevo atajo → ⓘ → activá <b>Mostrar en hoja para compartir</b> (solo URLs y páginas de Safari). Agregá la acción <b>Obtener contenido de URL</b>: Método <b>POST</b>; encabezados <b>apikey</b> = tu clave y <b>Content-Type</b> = application/json; cuerpo <b>JSON</b> con <b>tok</b> (Texto) = tu token, <b>u</b> (Texto) = Entrada del atajo y, opcional, <b>t</b> (Texto) = Nombre de la entrada. Después sumá <b>Mostrar notificación</b>.</p>
   ${d.map(([n, v], i) => `<div class="card row"><div class="grow"><div class="mu">${n}</div><div style="word-break:break-all;font-size:13px">${esc(v)}</div></div><button class="s" data-cp="${i}">Copiar</button></div>`).join("")}`, bandeja, "Volver");
   document.querySelectorAll("[data-cp]").forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText(d[b.dataset.cp][1]); b.textContent = "✓"; } catch (e) { alert("No pude copiar. Mantené apretado el texto para copiarlo."); } });
+}
+
+function menuHome() {
+  const el = document.createElement("div"); el.className = "pop";
+  el.innerHTML = `<div><button data-m="bj"><span>📥 Bandeja</span>${S.bj ? `<span class="tag" style="background:var(--no)">${S.bj}</span>` : ""}</button><button data-m="pt"><span>🗑 Proyectos eliminados</span></button><hr><button data-m="cu"><span>👤 Mi cuenta</span></button><button data-m="at"><span>⚙️ Atajo de iPhone</span></button></div>`;
+  el.onclick = e => {
+    const m = e.target.closest("[data-m]")?.dataset.m; el.remove();
+    if (m === "bj") bandeja(); else if (m === "pt") papeleraProy(); else if (m === "cu") cuenta(); else if (m === "at") configAtajo();
+  };
+  document.body.appendChild(el);
+}
+
+async function cuenta() {
+  const u = (await db.auth.getSession().catch(() => ({ data: {} }))).data.session?.user;
+  modal(`<h3>👤 Mi cuenta</h3><div class="card"><div class="mu">Email</div><b>${esc(u?.email || "(sin conexión)")}</b></div>
+  <div class="lbl">Cambiar contraseña</div>
+  <label>Contraseña nueva</label><input id="n1" type="password" autocomplete="new-password">
+  <label>Repetir contraseña</label><input id="n2" type="password" autocomplete="new-password">
+  <p id="cm" style="min-height:18px;margin:0 0 10px;font-size:14px"></p>
+  <button style="width:100%" id="cc">Guardar contraseña</button>
+  <button class="d" style="width:100%;margin-top:14px" id="cs">Cerrar sesión</button>`, null, "Cerrar");
+  const say = (t, ok) => { $("cm").style.color = ok ? "var(--ok)" : "var(--no)"; $("cm").textContent = t; };
+  $("cc").onclick = async () => {
+    const a = $("n1").value;
+    if (a.length < 6) return say("La contraseña debe tener al menos 6 caracteres.");
+    if (a !== $("n2").value) return say("Las contraseñas no coinciden.");
+    const { error } = await db.auth.updateUser({ password: a });
+    if (error) return say(msgErr(error.message));
+    $("n1").value = $("n2").value = ""; say("✅ Contraseña actualizada.", true);
+  };
+  $("cs").onclick = () => { close(); $("lo").click(); };
 }
 
 async function papelera() {
