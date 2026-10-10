@@ -146,11 +146,13 @@ function drawProject() {
     <div class="grow"><div class="mu">Saldo</div><b>${money(saldo)}</b></div>
     <div class="grow"><div class="mu">Total cargado</div><b>${money(total)}</b></div></div>
     ${fijosExceden ? `<p style="color:var(--no)">⚠ Los ítems fijados superan el presupuesto.</p>` : ""}</div>
+    ${S.regs.length ? `<button class="s" id="sg" style="width:100%;margin-bottom:6px">✨ Sugerir alternativa</button>` : ""}
     <div class="lbl">✅ Se puede comprar (${ok.length})</div>${ok.map(item).join("") || `<p class="mu">Nada por ahora.</p>`}
     <div class="lbl">⛔ No alcanza (${no.length})</div>${no.map(item).join("") || `<p class="mu">Todo entra.</p>`}
     <button class="fab" id="nr">+ Ítem</button>`;
   document.querySelectorAll("[data-r]").forEach(el => el.onclick = () => regForm(S.regs.find(x => x.id == el.dataset.r)));
   $("nr").onclick = () => regForm();
+  if ($("sg")) $("sg").onclick = sugerir;
 }
 
 function regForm(r) {
@@ -170,6 +172,67 @@ function regForm(r) {
   if (r) $("del").onclick = async () => {
     if (!confirm("¿Eliminar ítem? Se conserva como inactivo.")) return;
     const res = await db.from("registro").update({ activo: false, fecha_eliminacion: new Date().toISOString() }).eq("id", r.id);
+    if (!fail(res.error)) { close(); openProject(S.p); }
+  };
+}
+
+// Puntaje de un ítem: 1 + peso de prioridad + peso de categoría (Alta e Incorporación pesan más)
+function puntos(r) {
+  const cr = [...S.cats].sort((a, b) => a.orden - b.orden), pr = [...S.pris].sort((a, b) => a.nivel - b.nivel);
+  const ci = cr.findIndex(c => c.id === r.categoria_id), pi = pr.findIndex(p => p.id === r.prioridad_id);
+  return 1 + (ci < 0 ? 0 : cr.length - ci) + (pi < 0 ? 0 : pr.length - pi);
+}
+
+// Mochila exacta: máximo puntaje con el presupuesto; a igual puntaje, menor gasto. Los fijos entran siempre.
+function optimizar() {
+  const fijos = S.regs.filter(r => r.fijo), libres = S.regs.filter(r => !r.fijo);
+  const cap = Number(S.p.valor_inicial) - fijos.reduce((s, r) => s + Number(r.valor), 0);
+  if (cap < 0) return { fijosExceden: true };
+  const it = libres.map(r => ({ r, v: puntos(r), c: Number(r.valor) }));
+  const V = it.reduce((s, x) => s + x.v, 0);
+  const dp = [new Array(V + 1).fill(Infinity)]; dp[0][0] = 0;
+  it.forEach((x, i) => {
+    const p = dp[i], n = p.slice();
+    for (let v = x.v; v <= V; v++) if (p[v - x.v] + x.c < n[v]) n[v] = p[v - x.v] + x.c;
+    dp.push(n);
+  });
+  let best = 0;
+  for (let v = V; v >= 0; v--) if (dp[it.length][v] <= cap) { best = v; break; }
+  const ids = new Set(fijos.map(r => r.id));
+  for (let i = it.length, v = best; i > 0; i--) if (dp[i][v] !== dp[i - 1][v]) { ids.add(it[i - 1].r.id); v -= it[i - 1].v; }
+  const sel = S.regs.filter(r => ids.has(r.id));
+  return { ids, pts: sel.reduce((s, r) => s + puntos(r), 0), gasto: sel.reduce((s, r) => s + Number(r.valor), 0), n: sel.length };
+}
+
+function sugerir() {
+  const cur = evaluar(), opt = optimizar();
+  if (opt.fijosExceden) return alert("Los ítems fijados superan el presupuesto. Liberá alguno para poder optimizar.");
+  const okIds = new Set(cur.lista.filter(r => r._ok).map(r => r.id));
+  const pc = cur.lista.filter(r => r._ok).reduce((s, r) => s + puntos(r), 0);
+  const entran = S.regs.filter(r => opt.ids.has(r.id) && !okIds.has(r.id));
+  const salen = S.regs.filter(r => !opt.ids.has(r.id) && okIds.has(r.id));
+  const mejor = opt.pts > pc || (opt.pts === pc && opt.gasto < cur.comprado);
+  const li = a => a.map(r => `<div class="row" style="padding:4px 0"><span class="grow">${esc(r.descripcion) || "(sin descripción)"}</span><b>${money(r.valor)}</b></div>`).join("");
+  const P = Number(S.p.valor_inicial);
+  modal(`<h3>✨ Alternativa sugerida</h3>
+  <div class="card"><div class="row mu"><span class="grow"></span><span style="width:90px;text-align:right">Actual</span><span style="width:90px;text-align:right">Sugerida</span></div>
+  <div class="row"><span class="grow">Ítems</span><b style="width:90px;text-align:right">${okIds.size}</b><b style="width:90px;text-align:right">${opt.n}</b></div>
+  <div class="row"><span class="grow">Puntaje</span><b style="width:90px;text-align:right">${pc}</b><b style="width:90px;text-align:right">${opt.pts}</b></div>
+  <div class="row"><span class="grow">Gasto</span><b style="width:90px;text-align:right">${money(cur.comprado)}</b><b style="width:90px;text-align:right">${money(opt.gasto)}</b></div>
+  <div class="row"><span class="grow">Saldo</span><b style="width:90px;text-align:right">${money(P - cur.comprado)}</b><b style="width:90px;text-align:right">${money(P - opt.gasto)}</b></div></div>
+  ${mejor ? `<div class="lbl">➕ Entran</div>${li(entran) || '<p class="mu">Ninguno</p>'}<div class="lbl">➖ Salen</div>${li(salen) || '<p class="mu">Ninguno</p>'}
+  <p class="mu">Al aplicar, los ítems elegidos quedan fijados 📌 y podés liberarlos cuando quieras.</p>
+  <button style="width:100%" id="ap">Aplicar sugerencia</button>`
+  : `<p>✅ Tu selección actual ya es la mejor posible con este presupuesto.</p>`}
+  <p class="mu" style="margin-top:12px">Puntaje: 1 + peso de la prioridad (Alta suma más) + peso de la categoría (la primera suma más).</p>
+  <button class="s" style="width:100%" id="lf">Liberar todos los fijos</button>`);
+  if ($("ap")) $("ap").onclick = async () => {
+    const ids = [...opt.ids].filter(id => !S.regs.find(r => r.id === id).fijo);
+    if (ids.length) { const res = await db.from("registro").update({ fijo: true }).in("id", ids); if (fail(res.error)) return; }
+    close(); openProject(S.p);
+  };
+  $("lf").onclick = async () => {
+    const res = await db.from("registro").update({ fijo: false }).eq("proyecto_id", S.p.id).eq("activo", true);
     if (!fail(res.error)) { close(); openProject(S.p); }
   };
 }
