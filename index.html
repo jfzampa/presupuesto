@@ -56,7 +56,8 @@ const SUPABASE_KEY = "sb_publishable_4__2tHY6qNwif2xQNg6sKw_TtnZE6X2";
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const S = { cats: [], pris: [], proys: [], p: null, regs: [], f: { q: "", c: "", p: "", e: "" } };
 const $ = id => document.getElementById(id);
-const money = n => new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(n || 0);
+const mm = (n, c) => new Intl.NumberFormat("es-AR", { style: "currency", currency: c || "ARS", maximumFractionDigits: 0 }).format(n || 0);
+const money = n => mm(n, S.p?.moneda);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fail = e => { if (e) { alert(e.message || e); return true; } };
 
@@ -151,28 +152,31 @@ async function home() {
   S.proys = data; S.p = null; S.f = { q: "", c: "", p: "", e: "" };
   const rg = data.length ? (await db.from("registro").select("proyecto_id,valor,comprado").eq("activo", true).in("proyecto_id", data.map(p => p.id))).data || [] : [];
   const st = {}; rg.forEach(r => { const o = st[r.proyecto_id] ||= { n: 0, g: 0 }; o.n++; if (r.comprado) o.g += Number(r.valor); });
-  const tp = data.reduce((a, p) => a + Number(p.valor_inicial), 0), tg = Object.values(st).reduce((a, o) => a + o.g, 0);
+  const mon = {}; data.forEach(p => { const c = p.moneda || "ARS", o = mon[c] ||= { tp: 0, tg: 0 }; o.tp += Number(p.valor_inicial); o.tg += st[p.id]?.g || 0; });
   $("hd").innerHTML = `<h1 class="bh">${logo(26)}Mis proyectos</h1><button class="s" id="lo">Salir</button>`;
   $("lo").onclick = async () => { await db.auth.signOut(); login(); };
-  $("app").innerHTML = (data.length ? `<div class="kpi"><div class="l">Disponible en tus proyectos</div><div class="v">${money(tp - tg)}</div><div class="r"><div><span class="l">Presupuesto</span><b>${money(tp)}</b></div><div><span class="l">Comprado</span><b>${money(tg)}</b></div><div><span class="l">Proyectos</span><b>${data.length}</b></div></div></div>`
-    + data.map(p => { const o = st[p.id] || { n: 0, g: 0 }, P = Number(p.valor_inicial); return `<div class="card" data-p="${p.id}"><div class="row"><div class="grow"><b>${esc(p.descripcion)}</b><div class="mu">${o.n} ítems · Presupuesto ${money(P)}</div></div><span>›</span></div><div class="bar"><i style="width:${Math.min(100, P ? o.g / P * 100 : 0)}%"></i></div><div class="mu" style="margin-top:6px">Comprado ${money(o.g)} · Disponible ${money(P - o.g)}</div></div>`; }).join("") : `<p class="mu">Todavía no tenés proyectos.</p>`)
-    + `<button class="fab" id="np">+ Proyecto</button>`;
+  $("app").innerHTML = (data.length ? Object.entries(mon).map(([c, o]) => `<div class="kpi"><div class="l">Disponible${Object.keys(mon).length > 1 ? " (" + c + ")" : " en tus proyectos"}</div><div class="v">${mm(o.tp - o.tg, c)}</div><div class="r"><div><span class="l">Presupuesto</span><b>${mm(o.tp, c)}</b></div><div><span class="l">Comprado</span><b>${mm(o.tg, c)}</b></div></div></div>`).join("")
+    + data.map(p => { const o = st[p.id] || { n: 0, g: 0 }, P = Number(p.valor_inicial); return `<div class="card" data-p="${p.id}"><div class="row"><div class="grow"><b>${esc(p.descripcion)}</b><div class="mu">${o.n} ítems · Presupuesto ${mm(P, p.moneda)}</div></div><span>›</span></div><div class="bar"><i style="width:${Math.min(100, P ? o.g / P * 100 : 0)}%"></i></div><div class="mu" style="margin-top:6px">Comprado ${mm(o.g, p.moneda)} · Disponible ${mm(P - o.g, p.moneda)}</div></div>`; }).join("") : `<p class="mu">Todavía no tenés proyectos.</p>`)
+    + `<p style="text-align:center"><a href="#" id="pt" style="color:var(--ac)">🗑 Proyectos eliminados</a></p><button class="fab" id="np">+ Proyecto</button>`;
   document.querySelectorAll("[data-p]").forEach(el => el.onclick = () => openProject(S.proys.find(x => x.id == el.dataset.p)));
   $("np").onclick = () => projForm();
+  $("pt").onclick = e => { e.preventDefault(); papeleraProy(); };
 }
 
 function projForm(p) {
   modal(`<h3>${p ? "Editar" : "Nuevo"} proyecto</h3>
   <label>Descripción</label><input id="pd" value="${esc(p?.descripcion)}">
   <label>Presupuesto</label><input id="pv" type="number" inputmode="decimal" value="${p?.valor_inicial ?? ""}">
+  <label>Moneda</label><select id="pm">${["ARS", "USD", "EUR", "UYU", "BRL"].map(c => `<option ${(p?.moneda || "ARS") === c ? "selected" : ""}>${c}</option>`).join("")}</select>
   <label>Ahorro mensual (opcional: estima cuándo llegás a lo que no alcanza)</label><input id="pa" type="number" inputmode="decimal" value="${p?.ahorro_mensual || ""}">
-  <div class="row"><button class="grow" id="ok">Guardar</button>${p ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
+  <div class="row"><button class="grow" id="ok">Guardar</button>${p ? `<button class="s" id="dup">Duplicar</button><button class="d" id="del">Eliminar</button>` : ""}</div>`);
   $("ok").onclick = async () => {
-    const o = { descripcion: $("pd").value.trim(), valor_inicial: +$("pv").value || 0, ahorro_mensual: +$("pa").value || 0 };
+    const o = { descripcion: $("pd").value.trim(), valor_inicial: +$("pv").value || 0, ahorro_mensual: +$("pa").value || 0, moneda: $("pm").value };
     if (!o.descripcion) return alert("Falta la descripción");
     const r = p ? await db.from("proyecto").update(o).eq("id", p.id) : await db.from("proyecto").insert({ ...o, activo: true });
     if (fail(r.error)) return; close(); p ? openProject({ ...p, ...o }) : home();
   };
+  if (p) $("dup").onclick = () => duplicar(p);
   if (p) $("del").onclick = async () => {
     if (!confirm("¿Eliminar el proyecto? Se conserva como inactivo.")) return;
     const r = await db.from("proyecto").update({ activo: false, fecha_eliminado: new Date().toISOString() }).eq("id", p.id);
@@ -305,6 +309,48 @@ async function moverItem(r, d) {
   close(); openProject(S.p);
 }
 
+async function papeleraProy() {
+  const { data, error } = await db.from("proyecto").select("*").eq("activo", false).order("fecha_eliminado", { ascending: false });
+  if (fail(error)) return;
+  modal(`<h3>🗑 Proyectos eliminados</h3>${data.length ? data.map(p => `<div class="card row"><div class="grow"><b>${esc(p.descripcion)}</b><div class="mu">${mm(p.valor_inicial, p.moneda)}${p.fecha_eliminado ? " · " + new Date(p.fecha_eliminado).toLocaleDateString("es-AR") : ""}</div></div><button data-rp="${p.id}">Restaurar</button></div>`).join("") : `<p class="mu">No hay proyectos eliminados.</p>`}`, null, "Cerrar");
+  document.querySelectorAll("[data-rp]").forEach(b => b.onclick = async () => {
+    const res = await db.from("proyecto").update({ activo: true, fecha_eliminado: null }).eq("id", b.dataset.rp);
+    if (!fail(res.error)) { close(); home(); }
+  });
+}
+
+async function duplicar(p) {
+  if (!confirm("¿Duplicar este proyecto con sus ítems, categorías y prioridades? Los ítems comprados vuelven a 'por comprar'.")) return;
+  const g = await db.from("proyecto").insert({ descripcion: p.descripcion + " (copia)", valor_inicial: p.valor_inicial, ahorro_mensual: p.ahorro_mensual, moneda: p.moneda, activo: true }).select().single();
+  if (fail(g.error)) return; const n = g.data;
+  await Promise.all([db.from("categoria").delete().eq("proyecto_id", n.id), db.from("prioridad").delete().eq("proyecto_id", n.id)]);
+  const [cs, ps, rg] = await Promise.all([db.from("categoria").select("*").eq("proyecto_id", p.id).eq("activo", true).order("orden"), db.from("prioridad").select("*").eq("proyecto_id", p.id).eq("activo", true).order("nivel"), db.from("registro").select("*").eq("proyecto_id", p.id).eq("activo", true).order("ordenamiento")]);
+  const nc = cs.data.length ? await db.from("categoria").insert(cs.data.map(c => ({ descripcion: c.descripcion, color: c.color, orden: c.orden, proyecto_id: n.id, activo: true }))).select() : { data: [] };
+  const np = ps.data.length ? await db.from("prioridad").insert(ps.data.map(x => ({ descripcion: x.descripcion, nivel: x.nivel, proyecto_id: n.id, activo: true }))).select() : { data: [] };
+  if (fail(nc.error) || fail(np.error)) return;
+  const mc = id => { const o = cs.data.find(c => c.id === id); return o ? nc.data.find(c => c.descripcion === o.descripcion)?.id ?? null : null; };
+  const mp = id => { const o = ps.data.find(x => x.id === id); return o ? np.data.find(x => x.descripcion === o.descripcion)?.id ?? null : null; };
+  for (const r of rg.data) {
+    const res = await db.from("registro").insert({ proyecto_id: n.id, descripcion: r.descripcion, valor: r.valor, cantidad: r.cantidad, precio_unitario: r.precio_unitario, categoria_id: mc(r.categoria_id), prioridad_id: mp(r.prioridad_id), nota: r.nota, link: r.link, fijo: r.fijo, activo: true });
+    if (fail(res.error)) return;
+  }
+  close(); home();
+}
+
+function compartir() {
+  modal(`<h3>📤 Compartir</h3><button style="width:100%;margin-bottom:8px" id="c1">Enviar resumen como texto</button><button class="s" style="width:100%" id="c2">Archivo para Excel (CSV)</button>`, null, "Cerrar");
+  $("c1").onclick = () => { close(); compartirTexto(); }; $("c2").onclick = () => { close(); exportarCsv(); };
+}
+
+async function exportarCsv() {
+  const { lista } = evaluar(), cat = id => S.cats.find(c => c.id === id)?.descripcion || "", pri = id => S.pris.find(x => x.id === id)?.descripcion || "";
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`, est = r => r.comprado ? "Comprado" : r._ok ? "Por comprar" : "No alcanza";
+  const rows = [["Estado", "Descripción", "Categoría", "Prioridad", "Cantidad", "Precio unitario", "Total", "Nota", "Link"], ...lista.map(r => [est(r), r.descripcion, cat(r.categoria_id), pri(r.prioridad_id), r.cantidad ?? 1, r.precio_unitario ?? r.valor, r.valor, r.nota, r.link])];
+  const blob = new Blob(["\uFEFF" + rows.map(r => r.map(q).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const f = new File([blob], `${S.p.descripcion}.csv`, { type: "text/csv" });
+  try { if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f], title: S.p.descripcion }); else { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = f.name; a.click(); } } catch (e) {}
+}
+
 async function papelera() {
   const { data, error } = await db.from("registro").select("*").eq("proyecto_id", S.p.id).eq("activo", false).order("fecha_eliminacion", { ascending: false });
   if (fail(error)) return;
@@ -327,7 +373,7 @@ function simular() {
   $("sl").oninput = calc; calc();
 }
 
-async function compartir() {
+async function compartirTexto() {
   const { lista, saldo } = evaluar();
   const f = a => a.map(r => `• ${r.descripcion || "(sin descripción)"} — ${money(r.valor)}`).join("\n") || "—";
   const t = `${S.p.descripcion}\nPresupuesto: ${money(S.p.valor_inicial)} · Saldo: ${money(saldo)}\n\n🛒 Comprado\n${f(lista.filter(r => r.comprado))}\n\n✅ Por comprar\n${f(lista.filter(r => r._ok && !r.comprado))}\n\n⛔ No alcanza\n${f(lista.filter(r => !r._ok))}`;
