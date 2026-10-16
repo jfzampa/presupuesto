@@ -191,12 +191,12 @@ async function home() {
   const mon = {}; data.forEach(p => { const c = p.moneda || "ARS", o = mon[c] ||= { tp: 0, tg: 0 }; o.tp += Number(p.valor_inicial); o.tg += st[p.id]?.g || 0; });
   $("hd").innerHTML = `<h1 class="bh">${logo(26)}Mis proyectos</h1><button class="s" id="bl" aria-label="Avisos" style="position:relative">🔔<span class="bdg" id="bn" hidden></span></button><button class="s" id="mn" aria-label="Menú">☰${bj ? ` <span class="tag" style="background:var(--no)">${bj}</span>` : ""}</button><button class="s" id="lo">Salir</button>`;
   $("lo").onclick = async () => { await db.auth.signOut().catch(() => {}); Object.keys(localStorage).filter(k => k.startsWith("alc")).forEach(k => localStorage.removeItem(k)); login(); };
-  $("app").innerHTML = (S.perfil?.nombre ? `<p class="mu" style="margin:0 0 8px">Hola, ${esc(S.perfil.nombre)} 👋</p>` : "") + (data.length ? Object.entries(mon).map(([c, o]) => `<div class="kpi"><div class="l">Disponible${Object.keys(mon).length > 1 ? " (" + c + ")" : " en tus proyectos"}</div><div class="v">${mm(o.tp - o.tg, c)}</div><div class="r"><div><span class="l">Presupuesto</span><b>${mm(o.tp, c)}</b></div><div><span class="l">Comprado</span><b>${mm(o.tg, c)}</b></div></div></div>`).join("")
+  $("app").innerHTML = tabsHtml("p") + (S.perfil?.nombre ? `<p class="mu" style="margin:0 0 8px">Hola, ${esc(S.perfil.nombre)} 👋</p>` : "") + (data.length ? Object.entries(mon).map(([c, o]) => `<div class="kpi"><div class="l">Disponible${Object.keys(mon).length > 1 ? " (" + c + ")" : " en tus proyectos"}</div><div class="v">${mm(o.tp - o.tg, c)}</div><div class="r"><div><span class="l">Presupuesto</span><b>${mm(o.tp, c)}</b></div><div><span class="l">Comprado</span><b>${mm(o.tg, c)}</b></div></div></div>`).join("")
     + data.map(p => { const o = st[p.id] || { n: 0, g: 0 }, P = Number(p.valor_inicial); return `<div class="card" data-p="${p.id}"><div class="row"><div class="grow"><b>${esc(p.descripcion)}</b>${p.user_id !== S.uid ? ` <span class="tag" style="background:#6b7280">Compartido</span>` : mem[p.id] ? " 👥" : ""}<div class="mu">${o.n} ítems · Presupuesto ${mm(P, p.moneda)}</div></div><span>›</span></div><div class="bar"><i style="width:${Math.min(100, P ? o.g / P * 100 : 0)}%"></i></div><div class="mu" style="margin-top:6px">Comprado ${mm(o.g, p.moneda)} · Disponible ${mm(P - o.g, p.moneda)}</div></div>`; }).join("") : `<p class="mu">Todavía no tenés proyectos.</p>`)
     + `<button class="fab" id="np">+ Proyecto</button>`;
   document.querySelectorAll("[data-p]").forEach(el => el.onclick = () => openProject(S.proys.find(x => x.id == el.dataset.p)));
   $("np").onclick = () => projForm();
-  $("mn").onclick = menuHome; $("bl").onclick = notifs; contarNotif(); suscribir();
+  $("mn").onclick = menuHome; $("bl").onclick = notifs; contarNotif(); suscribir(); tabsInit();
 }
 
 function projForm(p) {
@@ -689,6 +689,202 @@ function plan() {
   <div class="card"><b>Hoy</b><div class="mu">${hoy.length} ítems con tu presupuesto actual</div>${liR(hoy)}</div>
   ${meses.map(x => `<div class="card"><div class="row"><b class="grow">Mes ${x.m} · ${x.d.toLocaleDateString("es-AR", { month: "short", year: "numeric" })}</b>${fl && x.m > mesesHasta ? `<span class="tag" style="background:var(--no)">Después de la fecha</span>` : ""}</div>${liR(x.compras)}<div class="mu">Saldo después: ${money(x.saldo)}</div></div>`).join("")}
   ${rest.length ? `<div class="card"><b>No entran en 3 años</b>${liR(rest)}</div>` : ""}`, null, "Cerrar");
+}
+
+// ===== FINANZAS: libros, cuentas y movimientos =====
+const hoyISO = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+const MONEDAS = ["ARS", "USD", "EUR", "UYU", "BRL"], ICONO = { efectivo: "💵", banco: "🏦", ahorro: "🐷", tarjeta: "💳" };
+const tabsHtml = a => `<div class="row" style="margin-bottom:12px"><button class="grow ${a === "p" ? "" : "s"}" data-tab="p">📁 Proyectos</button><button class="grow ${a === "f" ? "" : "s"}" data-tab="f">💰 Finanzas</button></div>`;
+const tabsInit = () => document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => b.dataset.tab === "p" ? home() : finHome());
+const salir = async () => { await db.auth.signOut().catch(() => {}); Object.keys(localStorage).filter(k => k.startsWith("alc")).forEach(k => localStorage.removeItem(k)); login(); };
+
+async function finHome() {
+  S.lib = null;
+  $("hd").innerHTML = `<h1 class="bh">${logo(26)}Finanzas</h1><button class="s" id="lo">Salir</button>`; $("lo").onclick = salir;
+  const { data, error } = await db.from("libro").select("*").eq("activo", true).order("fecha_creado");
+  if (fail(error)) return;
+  S.libros = data;
+  $("app").innerHTML = tabsHtml("f") + (data.length ? data.map(l => `<div class="card row" data-l="${l.id}"><div class="grow"><b>${esc(l.nombre)}</b>${l.user_id !== S.uid ? ` <span class="tag" style="background:#6b7280">Compartido</span>` : ""}<div class="mu">Moneda principal ${esc(l.moneda)}</div></div><span>›</span></div>`).join("")
+    : `<div class="card"><b>Creá tu primer libro</b><p class="mu">Un libro agrupa tus cuentas y movimientos, por ejemplo "Hogar" o "Personal". Podés tener varios y compartirlos con otra persona.</p></div>`) + `<button class="fab" id="nl">+ Libro</button>`;
+  tabsInit(); $("nl").onclick = () => libroForm();
+  document.querySelectorAll("[data-l]").forEach(el => el.onclick = () => abrirLibro(S.libros.find(x => x.id == el.dataset.l)));
+}
+
+function libroForm(l) {
+  modal(`<h3>${l ? "Editar" : "Nuevo"} libro</h3><label>Nombre</label><input id="ln" value="${esc(l?.nombre)}" placeholder="Ej: Hogar">
+  <label>Moneda principal</label><select id="lm">${MONEDAS.map(c => `<option ${(l?.moneda || S.perfil?.moneda || "ARS") === c ? "selected" : ""}>${c}</option>`).join("")}</select>
+  <p class="mu" style="margin:-4px 0 10px">Todos los totales se muestran en esta moneda.</p>
+  <div class="row"><button class="grow" id="ok">Guardar</button>${l && l.user_id === S.uid ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
+  $("ok").onclick = async () => {
+    const o = { nombre: $("ln").value.trim(), moneda: $("lm").value }; if (!o.nombre) return alert("Falta el nombre.");
+    const r = l ? await db.from("libro").update(o).eq("id", l.id).select().single() : await db.from("libro").insert(o).select().single();
+    if (fail(r.error)) return; close(); abrirLibro(r.data);
+  };
+  if ($("del")) $("del").onclick = async () => {
+    if (!confirm("¿Eliminar el libro? Queda guardado como inactivo.")) return;
+    const r = await db.from("libro").update({ activo: false, fecha_eliminado: new Date().toISOString() }).eq("id", l.id);
+    if (!fail(r.error)) { close(); finHome(); }
+  };
+}
+
+async function abrirLibro(l) {
+  S.lib = l; if (!S.mes) S.mes = hoyISO().slice(0, 7);
+  const q = t => db.from(t).select("*").eq("libro_id", l.id);
+  const [cu, ca, pr, tc, sa] = await Promise.all([q("cuenta").order("id"), q("categoria_fin").order("id"), q("propiedad").order("id"), q("libro_tc"), q("cuenta_saldo")]);
+  for (const r of [cu, ca, pr, tc, sa]) if (fail(r.error)) return;
+  S.cu = cu.data; S.cf = ca.data; S.pr = pr.data; S.tc = Object.fromEntries(tc.data.map(x => [x.moneda, Number(x.valor)])); S.sal = Object.fromEntries(sa.data.map(x => [x.id, Number(x.saldo)]));
+  await cargarMes();
+}
+
+async function cargarMes() {
+  const [y, m] = S.mes.split("-").map(Number), pad = n => String(n).padStart(2, "0");
+  const ini = `${S.mes}-01`, fin = m === 12 ? `${y + 1}-01-01` : `${y}-${pad(m + 1)}-01`, pm = m === 1 ? `${y - 1}-12-01` : `${y}-${pad(m - 1)}-01`;
+  const b = () => db.from("movimiento").select("*").eq("libro_id", S.lib.id).eq("activo", true);
+  const [a, p] = await Promise.all([b().gte("fecha", ini).lt("fecha", fin).order("fecha", { ascending: false }).order("id", { ascending: false }), b().gte("fecha", pm).lt("fecha", ini)]);
+  if (fail(a.error) || fail(p.error)) return;
+  S.mv = a.data; S.mvp = p.data; drawLibro();
+}
+
+function totales(mv) {
+  const falta = new Set(), porCat = {}; let ing = 0, gas = 0;
+  mv.forEach(m => {
+    const c = S.cu.find(x => x.id === m.cuenta_id); if (!c || m.tipo === "transferencia") return;
+    const f = c.moneda === S.lib.moneda ? 1 : S.tc[c.moneda]; if (!f) { falta.add(c.moneda); return; }
+    const v = Number(m.monto) * f;
+    if (m.tipo === "ingreso") ing += v; else { gas += v; const k = m.categoria_id ?? 0; porCat[k] = (porCat[k] || 0) + v; }
+  });
+  return { ing, gas, porCat, falta };
+}
+
+function drawLibro() {
+  const L = S.lib, T = totales(S.mv), TP = totales(S.mvp), mon = n => mm(n, L.moneda), [y, mo] = S.mes.split("-").map(Number);
+  const etiq = new Date(y, mo - 1, 1).toLocaleDateString("es-AR", { month: "long", year: "numeric" });
+  $("hd").innerHTML = `<button class="s" id="bk">‹</button><h1>${esc(L.nombre)}</h1><button class="s" id="el">⚙︎</button>`;
+  const cuentas = S.cu.filter(c => c.activo), cn = id => S.cu.find(c => c.id === id)?.nombre || "", cat = id => S.cf.find(c => c.id === id);
+  const tot = cuentas.reduce((s, c) => { const f = c.moneda === L.moneda ? 1 : S.tc[c.moneda]; return f ? s + (S.sal[c.id] || 0) * f : s; }, 0);
+  const falta = new Set([...T.falta, ...cuentas.filter(c => c.moneda !== L.moneda && !S.tc[c.moneda]).map(c => c.moneda)]);
+  const dg = TP.gas > 0 ? `${T.gas > TP.gas ? "▲" : "▼"} ${Math.abs(Math.round((T.gas / TP.gas - 1) * 100))} % en gastos vs. mes anterior` : "";
+  const cats = Object.entries(T.porCat).sort((a, b) => b[1] - a[1]);
+  const dias = {}; S.mv.forEach(m => (dias[m.fecha] ||= []).push(m));
+  const fila = m => { const c = S.cu.find(x => x.id === m.cuenta_id), k = cat(m.categoria_id), p = S.pr.find(x => x.id === m.propiedad_id), tr = m.tipo === "transferencia";
+    const col = m.tipo === "ingreso" ? "var(--ok)" : tr ? "var(--mu)" : "var(--tx)";
+    return `<div class="card row" data-mv="${m.id}"><span style="font-size:20px">${tr ? "↔️" : m.tipo === "ingreso" ? "⬆️" : "⬇️"}</span><div class="grow"><b>${esc(m.descripcion || k?.nombre || (tr ? "Transferencia" : "Movimiento"))}</b>
+      <div class="mu">${tr ? `${esc(cn(m.cuenta_id))} → ${esc(cn(m.cuenta_destino_id))}` : esc(cn(m.cuenta_id)) + (k ? " · " + esc(k.nombre) : "")}${p ? " · " + esc(p.nombre) : ""}</div></div>
+      <b style="color:${col}">${m.tipo === "ingreso" ? "+" : tr ? "" : "−"}${mm(m.monto, c?.moneda)}</b></div>`; };
+  $("app").innerHTML = `<div class="row" style="margin-bottom:10px"><button class="s" id="m1">‹</button><b class="grow" style="text-align:center;text-transform:capitalize">${etiq}</b><button class="s" id="m2">›</button></div>
+  <div class="kpi"><div class="l">Resultado del mes</div><div class="v">${mon(T.ing - T.gas)}</div><div class="r"><div><span class="l">Ingresos</span><b>${mon(T.ing)}</b></div><div><span class="l">Gastos</span><b>${mon(T.gas)}</b></div></div>${dg ? `<div class="l" style="margin-top:10px">${dg}</div>` : ""}</div>
+  ${falta.size ? `<p style="color:var(--no);font-size:14px">⚠ Falta el tipo de cambio de ${[...falta].join(", ")}. Tocá ⚙︎ → Tipo de cambio.</p>` : ""}
+  <div class="card"><div class="lbl" style="margin-top:0">Cuentas · ${mon(tot)}</div>
+  ${cuentas.map(c => `<div class="row" data-cu="${c.id}" style="padding:8px 0"><span>${ICONO[c.tipo]}</span><div class="grow">${esc(c.nombre)} <span class="mu">${c.moneda}</span></div><b>${mm(S.sal[c.id] || 0, c.moneda)}</b></div>`).join("") || `<p class="mu">Todavía no tenés cuentas.</p>`}
+  <button class="s" style="width:100%;margin-top:6px" id="nc2">+ Cuenta</button></div>
+  ${cats.length ? `<div class="card"><div class="lbl" style="margin-top:0">Gastos por categoría</div>${cats.map(([id, v]) => { const k = cat(+id); return `<div style="margin-bottom:8px"><div class="row"><span class="dot" style="background:${esc(k?.color || "#94a3b8")}"></span><span class="grow">${esc(k?.nombre || "Sin categoría")}</span><b>${mon(v)}</b><span class="mu">${T.gas ? Math.round(v / T.gas * 100) : 0} %</span></div><div class="bar"><i style="width:${T.gas ? v / T.gas * 100 : 0}%;background:${esc(k?.color || "#94a3b8")}"></i></div></div>`; }).join("")}</div>` : ""}
+  ${Object.keys(dias).length ? Object.entries(dias).map(([d, a]) => `<div class="lbl">${new Date(d + "T12:00:00").toLocaleDateString("es-AR", { weekday: "short", day: "numeric", month: "short" })}</div>${a.map(fila).join("")}`).join("") : `<p class="mu">No hay movimientos en este mes.</p>`}
+  <button class="fab" id="nm">+ Movimiento</button>`;
+  $("bk").onclick = finHome; $("el").onclick = libroMenu; $("nc2").onclick = () => cuentaForm(); $("nm").onclick = () => movForm();
+  const mes = d => { const x = new Date(y, mo - 1 + d, 1); S.mes = x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0"); cargarMes(); };
+  $("m1").onclick = () => mes(-1); $("m2").onclick = () => mes(1);
+  document.querySelectorAll("[data-mv]").forEach(el => el.onclick = () => movForm(S.mv.find(x => x.id == el.dataset.mv)));
+  document.querySelectorAll("[data-cu]").forEach(el => el.onclick = () => cuentaForm(S.cu.find(x => x.id == el.dataset.cu)));
+}
+
+function libroMenu() {
+  modal(`<h3>⚙︎ ${esc(S.lib.nombre)}</h3><button class="s" style="width:100%;margin-bottom:8px" id="g1">✏️ Editar libro</button><button class="s" style="width:100%;margin-bottom:8px" id="g2">💱 Tipo de cambio</button><button class="s" style="width:100%" id="g3">👥 Personas con acceso</button>`, null, "Cerrar");
+  $("g1").onclick = () => libroForm(S.lib); $("g2").onclick = tcForm; $("g3").onclick = miembrosLibro;
+}
+
+function cuentaForm(c) {
+  modal(`<h3>${c ? "Editar" : "Nueva"} cuenta</h3><label>Nombre</label><input id="cn" value="${esc(c?.nombre)}" placeholder="Ej: Caja de ahorro en dólares">
+  <label>Tipo</label><select id="ct">${[["efectivo", "💵 Efectivo"], ["banco", "🏦 Banco"], ["ahorro", "🐷 Ahorro"], ["tarjeta", "💳 Tarjeta de crédito"]].map(([v, t]) => `<option value="${v}" ${c?.tipo === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+  <label>Moneda</label><select id="cm2">${MONEDAS.map(x => `<option ${(c?.moneda || S.lib.moneda) === x ? "selected" : ""}>${x}</option>`).join("")}</select>
+  <label>Saldo inicial</label><input id="cs2" type="number" inputmode="decimal" value="${c?.saldo_inicial ?? 0}">
+  <p class="mu" style="margin:-4px 0 10px">En una tarjeta, el saldo inicial es lo que debés, en negativo. Nunca guardes el número de la tarjeta: solo un apodo.</p>
+  <div class="row"><button class="grow" id="ok">Guardar</button>${c ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
+  $("ok").onclick = async () => {
+    const o = { nombre: $("cn").value.trim(), tipo: $("ct").value, moneda: $("cm2").value, saldo_inicial: +$("cs2").value || 0 }; if (!o.nombre) return alert("Falta el nombre.");
+    const r = c ? await db.from("cuenta").update(o).eq("id", c.id) : await db.from("cuenta").insert({ ...o, libro_id: S.lib.id });
+    if (!fail(r.error)) { close(); abrirLibro(S.lib); }
+  };
+  if (c) $("del").onclick = async () => {
+    if (!confirm("¿Eliminar la cuenta? Sus movimientos quedan guardados.")) return;
+    const r = await db.from("cuenta").update({ activo: false }).eq("id", c.id); if (!fail(r.error)) { close(); abrirLibro(S.lib); }
+  };
+}
+
+function movForm(m) {
+  let tipo = m?.tipo || "gasto"; const act = S.cu.filter(c => c.activo), cu = id => S.cu.find(c => c.id === id);
+  const opt = (a, sel, f) => a.map(x => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(f(x))}</option>`).join("");
+  if (!act.length) return alert("Primero creá una cuenta.");
+  modal(`<h3>${m ? "Editar" : "Nuevo"} movimiento</h3>
+  <div class="row" style="margin-bottom:10px">${[["gasto", "Gasto"], ["ingreso", "Ingreso"], ["transferencia", "Transfer."]].map(([t, n]) => `<button class="grow ${t === tipo ? "" : "s"}" data-t="${t}">${n}</button>`).join("")}</div>
+  <label>Monto</label><input id="mo" type="number" inputmode="decimal" value="${m?.monto ?? ""}">
+  <label id="lc"></label><select id="mc">${opt(act, m?.cuenta_id, c => `${c.nombre} (${c.moneda})`)}</select>
+  <div id="dst"><label>Cuenta destino</label><select id="md">${opt(act, m?.cuenta_destino_id, c => `${c.nombre} (${c.moneda})`)}</select>
+  <div id="xd"><label>Monto que llega a la cuenta destino</label><input id="mx" type="number" inputmode="decimal" value="${m?.monto_destino ?? ""}"></div></div>
+  <div id="cat"><label>Categoría</label><select id="mk"></select></div>
+  <label>Propiedad (opcional)</label><select id="mp"></select>
+  <label>Fecha</label><input id="mf" type="date" value="${m?.fecha || hoyISO()}">
+  <label>Descripción</label><input id="md2" value="${esc(m?.descripcion)}">
+  <label>Nota</label><input id="mn" value="${esc(m?.nota)}">
+  <div class="row"><button class="grow" id="ok">Guardar</button>${m ? `<button class="d" id="del">Eliminar</button>` : ""}</div>`);
+  const pintar = (k, p) => {
+    k = k ?? (+$("mk").value || m?.categoria_id || ""); p = p ?? (+$("mp").value || m?.propiedad_id || "");
+    $("mk").innerHTML = `<option value="">—</option>${opt(S.cf.filter(c => c.tipo === (tipo === "ingreso" ? "ingreso" : "gasto") && (c.activo || c.id === k)), +k, c => c.nombre)}<option value="+">➕ Nueva…</option>`;
+    $("mp").innerHTML = `<option value="">—</option>${opt(S.pr.filter(x => x.activo || x.id === p), +p, x => x.nombre)}<option value="+">➕ Nueva…</option>`;
+    $("lc").textContent = tipo === "transferencia" ? "Cuenta origen" : "Cuenta"; $("dst").hidden = $("cat").hidden = false; $("dst").hidden = tipo !== "transferencia"; $("cat").hidden = tipo === "transferencia";
+    const a = cu(+$("mc").value), b = cu(+$("md").value); $("xd").hidden = !(tipo === "transferencia" && a && b && a.moneda !== b.moneda);
+    document.querySelectorAll("[data-t]").forEach(x => x.className = "grow " + (x.dataset.t === tipo ? "" : "s"));
+  };
+  document.querySelectorAll("[data-t]").forEach(x => x.onclick = () => { tipo = x.dataset.t; pintar(""); });
+  $("mc").onchange = $("md").onchange = () => pintar();
+  const nueva = async (tabla, extra, arr, sel) => {
+    const n = (prompt("Nombre:") || "").trim(); if (!n) return pintar();
+    const r = await db.from(tabla).insert({ libro_id: S.lib.id, nombre: n, ...extra }).select().single(); if (fail(r.error)) return pintar();
+    arr.push(r.data); sel === "k" ? pintar(r.data.id) : pintar(undefined, r.data.id);
+  };
+  $("mk").onchange = () => { if ($("mk").value === "+") nueva("categoria_fin", { tipo: tipo === "ingreso" ? "ingreso" : "gasto", color: "#2563eb" }, S.cf, "k"); };
+  $("mp").onchange = () => { if ($("mp").value === "+") nueva("propiedad", {}, S.pr, "p"); };
+  pintar();
+  $("ok").onclick = async () => {
+    const monto = +$("mo").value; if (!(monto > 0)) return alert("Escribí un monto mayor a cero.");
+    const o = { libro_id: S.lib.id, tipo, monto, cuenta_id: +$("mc").value, fecha: $("mf").value || hoyISO(), descripcion: $("md2").value.trim() || null, nota: $("mn").value.trim() || null,
+      propiedad_id: +$("mp").value || null, categoria_id: tipo === "transferencia" ? null : (+$("mk").value || null), cuenta_destino_id: null, monto_destino: null };
+    if (tipo === "transferencia") {
+      o.cuenta_destino_id = +$("md").value; if (o.cuenta_destino_id === o.cuenta_id) return alert("Elegí dos cuentas distintas.");
+      o.monto_destino = cu(o.cuenta_id).moneda !== cu(o.cuenta_destino_id).moneda ? (+$("mx").value || 0) : monto;
+      if (!(o.monto_destino > 0)) return alert("Escribí cuánto llega a la cuenta destino.");
+    }
+    const r = m ? await db.from("movimiento").update(o).eq("id", m.id) : await db.from("movimiento").insert(o);
+    if (!fail(r.error)) { close(); abrirLibro(S.lib); }
+  };
+  if (m) $("del").onclick = async () => {
+    if (!confirm("¿Eliminar el movimiento? Queda guardado como inactivo.")) return;
+    const r = await db.from("movimiento").update({ activo: false, fecha_eliminacion: new Date().toISOString() }).eq("id", m.id);
+    if (!fail(r.error)) { close(); abrirLibro(S.lib); }
+  };
+}
+
+function tcForm() {
+  const ms = [...new Set(S.cu.filter(c => c.activo && c.moneda !== S.lib.moneda).map(c => c.moneda))];
+  modal(`<h3>💱 Tipo de cambio</h3><p class="mu">Cuánto vale 1 unidad de cada moneda en ${S.lib.moneda}. Lo cargás vos y se usa para sumar todo en un solo total.</p>
+  ${ms.length ? ms.map(x => `<label>1 ${x} = (${S.lib.moneda})</label><input data-tc="${x}" type="number" inputmode="decimal" value="${S.tc[x] ?? ""}">`).join("") + `<button style="width:100%" id="ok">Guardar</button>` : `<p>Tus cuentas están todas en ${S.lib.moneda}, no hace falta cargar nada.</p>`}`, null, "Cerrar");
+  if ($("ok")) $("ok").onclick = async () => {
+    const rows = [...document.querySelectorAll("[data-tc]")].filter(i => +i.value > 0).map(i => ({ libro_id: S.lib.id, moneda: i.dataset.tc, valor: +i.value }));
+    const r = await db.from("libro_tc").upsert(rows, { onConflict: "libro_id,moneda" }); if (!fail(r.error)) { close(); abrirLibro(S.lib); }
+  };
+}
+
+async function miembrosLibro() {
+  const { data, error } = await db.from("libro_miembro").select("*").eq("libro_id", S.lib.id); if (fail(error)) return;
+  const dueno = S.lib.user_id === S.uid;
+  modal(`<h3>👥 Personas con acceso</h3><p class="mu">Todos ven y editan las mismas cuentas y movimientos.</p><div class="card row"><div class="grow">${dueno ? "Vos" : "Dueño del libro"}</div><span class="mu">Dueño</span></div>
+  ${data.map(m => `<div class="card row"><div class="grow">${esc(m.email)}${m.user_id === S.uid ? " (vos)" : ""}</div>${dueno || m.user_id === S.uid ? `<button class="s" data-rm="${m.user_id}">${dueno ? "Quitar" : "Salir"}</button>` : ""}</div>`).join("")}
+  ${dueno ? `<label>Invitar por email</label><input id="ie" type="email" inputmode="email" autocapitalize="none" placeholder="persona@email.com"><p id="im" class="mu" style="min-height:18px;color:var(--no)"></p><button style="width:100%" id="iv">Invitar</button><p class="mu">La persona tiene que haber creado antes su cuenta en Alcanza con ese email.</p>` : ""}`, null, "Cerrar");
+  document.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => {
+    if (!confirm(b.dataset.rm === S.uid ? "¿Salir de este libro?" : "¿Quitar el acceso?")) return;
+    const r = await db.from("libro_miembro").delete().eq("libro_id", S.lib.id).eq("user_id", b.dataset.rm); if (fail(r.error)) return;
+    if (b.dataset.rm === S.uid) { close(); finHome(); } else miembrosLibro();
+  });
+  if ($("iv")) $("iv").onclick = async () => { const { error } = await db.rpc("invitar_libro", { lid: S.lib.id, correo: $("ie").value }); if (error) return $("im").textContent = error.message; miembrosLibro(); };
 }
 
 async function papelera() {
